@@ -473,3 +473,12 @@
 # # print(csr)
 # # csr['mhartid'] = 10
 
+from devices import BaseDevice
+
+# dev = BaseDevice(0x100, 'main')
+# dev.write(0, 0xdeadbeef)
+
+dev = BaseDevice.from_binary_file("tests/rv32/bin/p/rv32mi-p-csr.bin")
+dev.hexdump()
+
+print(dev)
