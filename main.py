@@ -468,17 +468,30 @@
 # # print(hex(h0.pc))
 # # hex(sys_bus.read(0x80000000, 4))
 # # print(hex(ram.read(0x00002000, 8)))
-
 # # csr = CSRFile([Extension.M])
 # # print(csr)
 # # csr['mhartid'] = 10
 
-from devices import BaseDevice
+import logging
+from devices import MemoryDevice
+from system_interface import SystemInterface
+from logger_config import setup_logging
 
+setup_logging(logging.DEBUG)
+log = logging.getLogger(__name__)
 # dev = BaseDevice(0x100, 'main')
+
 # dev.write(0, 0xdeadbeef)
 
-dev = BaseDevice.from_binary_file("tests/rv32/bin/p/rv32mi-p-csr.bin")
-dev.hexdump()
+# ram : MemoryDevice = MemoryDevice(0x50, 'RAM') 
+ram =  MemoryDevice.from_binary_file("tests/rv32/bin/p/rv32mi-p-csr.bin", "RAM")
+sys_bus = SystemInterface()
+sys_bus.register_device(ram, 0x8000_0000)
 
-print(dev)
+print(sys_bus)
+ 
+sys_bus.write(0x8000_0000, 0xaaaa_aaaa)
+# print(hex(sys_bus.read(0x8000_2010, 1)))
+
+
+ram.hexdump()

@@ -1,37 +1,29 @@
+import logging
 from struct import pack, unpack
+
+
+log = logging.getLogger(__name__)
 
 class BaseDevice:
     
     def __init__(self, size, name="dev"):
-        self.size = size
-        self.name = name
-        self.mem = b'\x00'*self.size
+        self.size : int = size
+        self.name : str = name
+        self.mem : bytearray = b'\x00'*self.size
     
-    @classmethod
-    def from_binary_file(cls: 'BaseDevice', filepath: str, devname='dev'):
-        
-        with open(filepath, 'rb') as f:
-            data = f.read()
-        
-        size = len(data)
-        round_size = cls.round4Kb(len(data))
-        newdev = cls(size=size, name=devname)
-        data = data+b'\x00'*(round_size-size)
-        newdev.mem = data
-
-        return newdev
-
-    def read(self, addr: int, size: int = 4):
-        assert 0>=addr, "something is wrong addr < 0" 
-        assert addr+size<=self.size, f"addr: {hex(addr)} is more than dev size"
+    def read(self, addr: int, size: int = 4) -> int:
+        assert addr>=0, "something is wrong addr < 0" 
+        assert addr+size<=self.size-1, \
+            f"addr: {hex(addr+size)} is more than dev size"
         
         enc_str = self.get_encoding(size)
         return unpack(enc_str, self.mem[addr:addr+size])[0]
     
     def write(self, addr: int, value: int, size: int = 4):
         
-        assert 0>=addr, "something is wrong addr < 0" 
-        assert addr+size<=self.size, f"addr: {hex(addr)} is more than dev size"
+        assert addr>=0, "something is wrong addr < 0" 
+        assert addr+size<=self.size-1, \
+            f"addr: {hex(addr+size)} is more than dev size"
         
         mask = (1<<(size*8))-1
         enc_str = self.get_encoding(size)
@@ -100,7 +92,31 @@ class BaseDevice:
         else:
             return f"{s:.1f}b"
         
-            
-        
     def __repr__(self):
-        return f"BaseDevice(name={self.name}, size={self.size_str()})"
+        return f"{self.__class__.__name__}(name={self.name}, size={self.size_str()})"
+    
+    
+class MemoryDevice(BaseDevice):
+    
+    def __init__(self, size, name="mem"):
+        super().__init__(size, name)
+    
+    @classmethod
+    def from_binary_file(
+            cls: 'BaseDevice', 
+            filepath: str, 
+            name='dev') -> 'MemoryDevice':
+        
+        with open(filepath, 'rb') as f:
+            data = f.read()
+        
+        size = len(data)
+        round_size = cls.round4Kb(len(data))
+        newdev = cls(size=round_size, name=name)
+        data = data+b'\x00'*(round_size-size)
+        newdev.mem = data
+
+        return newdev
+    
+    
+    
