@@ -1,12 +1,11 @@
-# import logging
-# from logger_config import setup_logging
-# from devices import MemoryDevice
-# from system_interface import SystemInterface
-# from utils import *
-# from cpu_enums import *
-# from pathlib import Path
-# from collections import deque, Counter
-
+import logging
+from cpu_enums import *
+from devices import MemoryDevice
+from utils import *
+from system_interface import SystemInterface
+from logger_config import setup_logging
+from pathlib import Path
+from typing import List, Dict, Tuple
 
 # # Max allowed repeats within recent jumps
 # MAX_JUMP_REPEAT = 20
@@ -82,19 +81,19 @@
 #     def __init__(self, 
 #             id:int, 
 #             bus: SystemInterface, 
-#             extensions:List[Extension] = []
+#             extensions:List[Ext] = []
 #         ):
         
 #         self.id = id
 #         self.bus = bus
         
-#         if isinstance(extensions, Extension):
+#         if isinstance(extensions, Ext):
 #             extensions = [extensions]
 #         self.extensions = extensions
         
 #         # Machine Mode implemented by default
-#         if Extension.M not in self.extensions:
-#             self.extensions.append(Extension.M) 
+#         if Ext.M not in self.extensions:
+#             self.extensions.append(Ext.M) 
         
 #         self.regfile = RegFile(32, self.XLEN, self.reg_names)
         
@@ -423,9 +422,130 @@
 #             self.exc_or_int = True
 #         # pass
     
-#     def is_implemented(self, e: Extension):
+#     def is_implemented(self, e: Ext):
 #         extension_value = sum([ex.value for ex in self.extensions]) & self.mask64
 #         return bool(extension_value&e.value)
+
+
+class RV64Hart():
+    
+    def __init__(self, hartid=0, extension_list: List[Ext] = []):
+        self.hartid : int = hartid
+        self.ext_list : List[Ext] = [Ext.M]+extension_list
+            
+    def is_ext_impl(self, e: Ext):
+        return e in self.ext_list
+
+
+csr = CsrReg(0x300, "mstatus", 64, {
+        "UIE": [0], "SIE": [1], "MIE": [3], "UPIE": [4], 
+        "SPIE": [5], "MPIE": [7], "SPP": [8], "MPP": [12, 11],
+        "FS": [14, 13], "XS": [16, 15], "MPRV": [17], "SUM": [18],
+        "MXR": [19], "TVM": [20], "TW": [21], "TSR": [22], "SD": [63]
+    })
+
+
+riscv_csr_fields = {
+    
+    "medeleg": (
+        0x302,
+        {
+            "EXCEPTIONS": [63, 0]
+        }
+    ),
+    "mideleg": (
+        0x303,
+        {
+            "INTERRUPTS": [63, 0]
+        }
+    ),
+    "mie": (
+        0x304,
+        {
+            "USIE": [0],
+            "SSIE": [1],
+            "MSIE": [3],
+            "UTIE": [4],
+            "STIE": [5],
+            "MTIE": [7],
+            "UEIE": [8],
+            "SEIE": [9],
+            "MEIE": [11]
+        }
+    ),
+    "mtvec": (
+        0x305,
+        {
+            "BASE": [63, 2],
+            "MODE": [1, 0]
+        }
+    ),
+    "mscratch": (
+        0x340,
+        {
+            "SCRATCH": [63, 0]
+        }
+    ),
+    "mepc": (
+        0x341,
+        {
+            "PC": [63, 0]
+        }
+    ),
+    "mcause": (
+        0x342,
+        {
+            "INTERRUPT": [63],
+            "EXCEPTION_CODE": [62, 0]
+        }
+    ),
+    "mtval": (
+        0x343,
+        {
+            "VALUE": [63, 0]
+        }
+    ),
+    "mip": (
+        0x344,
+        {
+            "USIP": [0],
+            "SSIP": [1],
+            "MSIP": [3],
+            "UTIP": [4],
+            "STIP": [5],
+            "MTIP": [7],
+            "UEIP": [8],
+            "SEIP": [9],
+            "MEIP": [11]
+        }
+    ),
+    "misa":     (0xf14, 64, {"Extensions": [25, 0]}),
+    "mvendorid":(0xf14, 32, {"bank": [31, 7],"Offset": [6, 0],}),
+    "marchid":  (0xf14, 64, {"Architecture_ID": [64, 0]}),
+    "mimpid":   (0xf14, 64, {"Implementation": [64, 0]}),
+    "mhartid":  (0xf14,{"Hart_ID": [63, 0]}),
+    "mstatus":  (0x300,
+        {
+            "UIE": [0], "SIE": [1], "MIE": [3], "UPIE": [4], "SPIE": [5], 
+            "UBE" : [6], "MPIE": [7], "SPP": [8],"VS" : [10, 9], "MPP": [12, 11], 
+            "FS": [14, 13],"XS": [16, 15], "MPRV": [17], "SUM": [18], "MXR": [19],
+            "TVM": [20], "TW": [21], "TSR": [22], "SPLEP": [23], "SDT": [24], 
+            "UXL": [33, 32],"SXL": [35, 34], "SBE": [63], "MBE": [37], 
+            "GVA": [38], "MPV": [39], "MPLEP": [41], "MDT": [42], "SD": [63]
+        }
+    ),
+}
+
+# csr.MPP = 0b11
+# print(csr.MPP)
+
+# r = Reg(32)
+# rs = RegSlice(r, 12, 11)
+
+# rs.val
+
+# csr._blocks['MPP'].val
+
 
 # setup_logging(logging.DEBUG)
 # # setup_logging(logging.CRITICAL)
@@ -448,7 +568,7 @@
 #     sys_bus = SystemInterface()
 #     sys_bus.register_device(ram, 0x80000000)
 
-#     h0 = RV64Hart(0, sys_bus, [Extension.S, Extension.U])
+#     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
 #     while(h0.step()):
 #         pass
     
@@ -464,34 +584,29 @@
 #     print(h0.csr._csr_str('mstatus'))
 #     del h0
 
-# # print(h0.csr)
-# # print(hex(h0.pc))
-# # hex(sys_bus.read(0x80000000, 4))
-# # print(hex(ram.read(0x00002000, 8)))
-# # csr = CSRFile([Extension.M])
-# # print(csr)
-# # csr['mhartid'] = 10
+# print(h0.csr)
+# print(hex(h0.pc))
+# hex(sys_bus.read(0x80000000, 4))
+# print(hex(ram.read(0x00002000, 8)))
+# csr = CSRFile([Ext.M])
+# print(csr)
+# csr['mhartid'] = 10
 
-import logging
-from devices import MemoryDevice
-from system_interface import SystemInterface
-from logger_config import setup_logging
+# import logging
+# from devices import MemoryDevice
+# from system_interface import SystemInterface
+# from logger_config import setup_logging
 
-setup_logging(logging.DEBUG)
-log = logging.getLogger(__name__)
-# dev = BaseDevice(0x100, 'main')
+# setup_logging(logging.DEBUG)
+# log = logging.getLogger(__name__)
+# ram =  MemoryDevice.from_binary_file("tests/rv32/bin/p/rv32mi-p-csr.bin", "RAM")
+# sys_bus = SystemInterface()
+# sys_bus.register_device(ram, 0x8000_0000)
 
-# dev.write(0, 0xdeadbeef)
-
-# ram : MemoryDevice = MemoryDevice(0x50, 'RAM') 
-ram =  MemoryDevice.from_binary_file("tests/rv32/bin/p/rv32mi-p-csr.bin", "RAM")
-sys_bus = SystemInterface()
-sys_bus.register_device(ram, 0x8000_0000)
-
-print(sys_bus)
+# print(sys_bus)
  
-sys_bus.write(0x8000_0000, 0xaaaa_aaaa)
-# print(hex(sys_bus.read(0x8000_2010, 1)))
+# sys_bus.write(0x8000_0000, 0xaaaa_aaaa)
+# # print(hex(sys_bus.read(0x8000_2010, 1)))
 
 
-ram.hexdump()
+# ram.hexdump()

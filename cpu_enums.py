@@ -69,7 +69,7 @@ class CSR_F3(Enum):
     CSRRCI = 0b111
     
 
-class Extension(Enum):
+class Ext(Enum):
     A = 1<<0   # Atomic
     B = 1<<1   # B ext
     C = 1<<2   # Compressed
@@ -91,7 +91,7 @@ class Extension(Enum):
     S = 1<<18  # Supervisor Mode
     T = 1<<19  # Reserved
     U = 1<<20  # User Mode
-    V = 1<<21  # Vector Extension
+    V = 1<<21  # Vector Ext
     W = 1<<22  # Reserved
     X = 1<<23  # non-std extension
     Y = 1<<24  # Reserved
@@ -104,9 +104,10 @@ class Priviledge(Enum):
 
 
 class Mode(Enum):
-    U = 0,
-    S = 1,
-    M = 2,
+    U = 0
+    S = 1
+    RES = 2
+    M = 3
     
 CSR_U = {
     0x000: "ustatus",
@@ -119,57 +120,57 @@ CSR_U = {
     0x044: "uip"
 }
 
-CSR_S = {
-    0x100: "sstatus",
-    0x102: "sedeleg",
-    0x103: "sideleg",
-    0x104: "sie",
-    0x105: "stvec",
-    0x106: "scounteren",
-    0x140: "sscratch",
-    0x141: "sepc",
-    0x142: "scause",
-    0x143: "stval",
-    0x144: "sip",
-    0x180: "satp",
-    0xDA0: "scountovf",
-    0x5A8: "scontext"
-}
+# CSR_S = {
+#     0x100: "sstatus",
+#     0x102: "sedeleg",
+#     0x103: "sideleg",
+#     0x104: "sie",
+#     0x105: "stvec",
+#     0x106: "scounteren",
+#     0x140: "sscratch",
+#     0x141: "sepc",
+#     0x142: "scause",
+#     0x143: "stval",
+#     0x144: "sip",
+#     0x180: "satp",
+#     0xDA0: "scountovf",
+#     0x5A8: "scontext"
+# }
 
-CSR_H = {
-    0x200: "vsstatus",
-    0x204: "vsie",
-    0x205: "vstvec",
-    0x240: "vsscratch",
-    0x241: "vsepc",
-    0x242: "vscause",
-    0x243: "vstval",
-    0x244: "vsip",
-    0x280: "vsatp",
+# CSR_H = {
+#     0x200: "vsstatus",
+#     0x204: "vsie",
+#     0x205: "vstvec",
+#     0x240: "vsscratch",
+#     0x241: "vsepc",
+#     0x242: "vscause",
+#     0x243: "vstval",
+#     0x244: "vsip",
+#     0x280: "vsatp",
 
-    0x600: "hstatus",
-    0x602: "hedeleg",
-    0x603: "hideleg",
-    0x604: "hie",
-    0x605: "htvec",
-    0x640: "hscratch",
-    0x641: "hepc",
-    0x642: "hcause",
-    0x643: "htval",
-    0x644: "hip",
-    0x645: "hvip",
-    0x646: "htinst",
-    0x64A: "henvcfg",
-    0x64B: "henvcfgh",  # RV32 only
-    0x680: "hgatp"
-}
+#     0x600: "hstatus",
+#     0x602: "hedeleg",
+#     0x603: "hideleg",
+#     0x604: "hie",
+#     0x605: "htvec",
+#     0x640: "hscratch",
+#     0x641: "hepc",
+#     0x642: "hcause",
+#     0x643: "htval",
+#     0x644: "hip",
+#     0x645: "hvip",
+#     0x646: "htinst",
+#     0x64A: "henvcfg",
+#     0x64B: "henvcfgh",  # RV32 only
+#     0x680: "hgatp"
+# }
 
 CSR_M = {
     0xF11: "mvendorid",
     0xF12: "marchid",
     0xF13: "mimpid",
     0xF14: "mhartid",
-    0xF14: "mconfigptr",
+    # 0xF14: "mconfigptr",
     
     0x300: "mstatus",
     0x301: "misa",
@@ -177,53 +178,53 @@ CSR_M = {
     0x303: "mideleg",
     0x304: "mie",
     0x305: "mtvec",
-    0x306: "mcounteren",
-    0x310: "mstatush",   # RV32 only
-    0x312: "mdelegh",   # RV32 only
+    # 0x306: "mcounteren",
+    # 0x310: "mstatush",   # RV32 only
+    # 0x312: "mdelegh",   # RV32 only
     
     0x340: "mscratch",
     0x341: "mepc",
     0x342: "mcause",
     0x343: "mtval",
     0x344: "mip",
-    0x345: "mtinst",
-    0x346: "mtval2",
+    # 0x345: "mtinst",
+    # 0x346: "mtval2",
     
-    0x3A0: "menvcfg",
-    0x3A1: "menvcfgh",     # RV32 only
-    0x747: "mseccfg",
-    0x757: "mseccfgh",     # RV32 only
+    # 0x3A0: "menvcfg",
+    # 0x3A1: "menvcfgh",     # RV32 only
+    # 0x747: "mseccfg",
+    # 0x757: "mseccfgh",     # RV32 only
 }
 
 
-CSR_DEBUG = {
-    0x7A0: "tselect",
-    0x7A1: "tdata1",
-    0x7A2: "tdata2",
-    0x7A3: "tdata3",
-    0x7B0: "dcsr",
-    0x7B1: "dpc",
-    0x7B2: "dscratch0",
-    0x7B3: "dscratch1"
-}
+# CSR_DEBUG = {
+#     0x7A0: "tselect",
+#     0x7A1: "tdata1",
+#     0x7A2: "tdata2",
+#     0x7A3: "tdata3",
+#     0x7B0: "dcsr",
+#     0x7B1: "dpc",
+#     0x7B2: "dscratch0",
+#     0x7B3: "dscratch1"
+# }
 
 
-# performance Counters / Timer 
-CSR_CTR_TMR = {
-    0xC00: "cycle",
-    0xC01: "time",
-    0xC02: "instret",
-    **{0xC03 + i: f"hpmcounter{i+3}" for i in range(29)},   # 0xC03 - 0xC1F
+# # performance Counters / Timer 
+# CSR_CTR_TMR = {
+#     0xC00: "cycle",
+#     0xC01: "time",
+#     0xC02: "instret",
+#     **{0xC03 + i: f"hpmcounter{i+3}" for i in range(29)},   # 0xC03 - 0xC1F
 
-    0xC80: "cycleh",       # RV32 only
-    0xC81: "timeh",        # RV32 only
-    0xC82: "instreth",     # RV32 only
-    **{0xC83 + i: f"hpmcounter{i+3}h" for i in range(29)}   # 0xC83 - 0xC9F (RV32 only)
-}
+#     0xC80: "cycleh",       # RV32 only
+#     0xC81: "timeh",        # RV32 only
+#     0xC82: "instreth",     # RV32 only
+#     **{0xC83 + i: f"hpmcounter{i+3}h" for i in range(29)}   # 0xC83 - 0xC9F (RV32 only)
+# }
 
 
-CSR_F = {
-    0x001: "fflags",
-    0x002: "frm",
-    0x003: "fcsr"
-}
+# CSR_F = {
+#     0x001: "fflags",
+#     0x002: "frm",
+#     0x003: "fcsr"
+# }

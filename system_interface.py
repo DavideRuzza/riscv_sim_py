@@ -70,7 +70,6 @@ class SystemInterface():
     def __repr__(self):
         
         head = " Memory Map "
-        # out = "----- Memory Map -----"
         out = []
         for i, (start, end) in enumerate(self.mem_map):
             out.append(f"* 0x{start:08X} - 0x{end:08X} = {self.dev_map[start].name}")
@@ -80,5 +79,5 @@ class SystemInterface():
         
         out.append("="*max_len)
         out.insert(0,"="*half_head_len+head+"="*(max_len-len(head)-half_head_len))
-        # out += "======================"
+
         return "\n".join(out)
