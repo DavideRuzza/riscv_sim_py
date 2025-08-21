@@ -25,6 +25,34 @@ else:
     TC="+" # top cross
     BC="+" # bottom cross
 
+COL = {
+    "rst": "\033[0m",      # Reset all formatting
+    "bold": "\033[1m",
+    "underline": "\033[4m",
+
+    # Regular colors
+    "k" : "\033[30m",
+    "r" : "\033[31m",
+    "g" : "\033[32m",
+    "y" : "\033[33m",
+    "b" : "\033[34m",
+    "m" : "\033[35m",
+    "c" : "\033[36m",
+    "w" : "\033[37m",
+    "gr": "\033[90m",
+
+
+    # Bright colors
+    # "bright_black": "\033[90m",
+    # "bright_red": "\033[91m",
+    # "bright_green": "\033[92m",
+    # "bright_yellow": "\033[93m",
+    # "bright_blue": "\033[94m",
+    # "bright_magenta": "\033[95m",
+    # "bright_cyan": "\033[96m",
+    # "bright_white": "\033[97m",
+}
+
 class Reg:
     def __init__(self, nbits, data=0):
         self.nbits = nbits
@@ -108,7 +136,6 @@ class Reg:
     def __str__(self):
         return "%x"%self.reg
 
-
 class RegSlice():
     
     def __init__(self, reg: Reg, msb:int, lsb:int=None):
@@ -135,7 +162,6 @@ class RegSlice():
             self.reg[self.msb:self.lsb] = value & self.mask
         else:
             self.reg[self.msb] = value & self.mask
-
 
 class RegFile:
     def __init__(self, n_regs, bus_size=32, reg_names:list[str]=None):
@@ -189,7 +215,6 @@ class RegFile:
                 dump_str+="%3s: %08x " % (name, self.reg_file[i])
         return dump_str
 
-
 class CsrReg(Reg):
     INIT = False
     
@@ -199,13 +224,13 @@ class CsrReg(Reg):
             xlen:int, 
             sections:Dict[str, List[int]]
         ):
-        super().__init__(xlen)
-        self.INIT=True
+        super().__init__(xlen, 0)
+        
         # sections be like {"name": [12,0], "name1": [20:13], ... }
         # this will create n regslices referencing the csr bloks
         self.addr = addr
         self.name = name
-        
+    
         addr_reg = Reg(12, addr)
         self.rw = addr_reg[11:10]
         self.priv = Mode(addr_reg[9:8])
@@ -216,11 +241,7 @@ class CsrReg(Reg):
                 name : RegSlice(self, *bits) \
                     for name, bits in sections.items()
             }
-        # self._block = list(sections.keys())
-        
-        # for name, bits in sections.items():
-        #     setattr(self, name, RegSlice(self.reg, *bits))
-                    
+           
     def __getattr__(self, attr):
         if attr in self._blocks:
             return self._blocks[attr].val
@@ -234,30 +255,56 @@ class CsrReg(Reg):
             self._blocks[name].val = value
         else:
             super().__setattr__(name, value)  # allow normal attributes
-        
-    
-    
-    
-    
 
-##########################
+#########################
 
 class CsrFile():
 
 
-    def __init__(self, ext_list, xlen=32):
+    def __init__(self, ext_list: List[Ext]):
         
-        self.xlen : int = xlen
-        self.csr : Dict[int, Reg]= {}
+        self.csr : Dict[int, Reg] = {}
         
-        self.name_map = {}
-        self.addr_map = {}
+        self.ext_list = ext_list 
+        self.crs_map : Dict[int, CsrReg]= {}
+        self.name_to_addr : Dict[str, int] = {}
+            
+        for ext in self.ext_list:
+            if   ext==Ext.M: self.add_csr_dict(CSR_M)
+            elif ext==Ext.S: self.add_csr_dict(CSR_S)
+            elif ext==Ext.U: self.add_csr_dict(CSR_U)
+            else:
+                raise AssertionError(f"unknown extension {ext.name}")
+        
+    def add_csr_dict(self, 
+            csr_dict : Dict[int, Tuple[str, int, Dict[str, List[int]]]]):
+        
+        for name, value in csr_dict.items():
+            addr, xlen, block_map = value
+            self.crs_map[addr] = CsrReg(addr, name, xlen, block_map)
+            self.name_to_addr[name] = addr
     
-    # def 
+    def __repr__(self):
+        max_len = max([len(i) for i in self.name_to_addr.keys()])
         
-    def __str__(self):
-        pass
-    
+        out = ["=== CSR File ==="]
+        
+        y = COL['y']
+        g = COL['g']
+        gr = COL['gr']
+        rst = COL['rst']
+        bold = COL['bold']
+        ul = COL['underline']
+        for addr, csr in self.crs_map.items():
+            
+            out.append(f"* {y}0x{addr:03X} {g}{ul}{csr.name}{rst} "\
+                f"{gr}{bold}{'-'*(max_len-len(csr.name))}{gr}" \
+                f"{'rw' if csr.rw==3 else f"r-"}-{csr.priv.name}- "\
+                f"{rst}0x{csr[:]:0{int(csr.nbits/4)}X}"
+                )
+            
+        return "\n".join(out)
+
 
 def int_64(uint_64):
     uint_64 = Reg(64, uint_64)

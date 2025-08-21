@@ -108,17 +108,73 @@ class Mode(Enum):
     S = 1
     RES = 2
     M = 3
+
+
+CSR_M = {    
+    "mvendorid":(0xf11, 32, {"bank": [31, 7],"Offset": [6, 0]}),
+    "marchid":  (0xf12, 64, {"Architecture_ID": [63, 0]}),
+    "mimpid":   (0xf13, 64, {"Implementation": [63, 0]}),
+    "mhartid":  (0xf14, 64, {"Hart_ID": [63, 0]}),
+    "mconfigptr": (0xf15, 64, {}),
+    "mstatus":  (0x300, 64, {
+            "UIE": [0], "SIE": [1], "MIE": [3], "UPIE": [4], "SPIE": [5], 
+            "UBE" : [6], "MPIE": [7], "SPP": [8],"VS" : [10, 9], "MPP": [12, 11], 
+            "FS": [14, 13],"XS": [16, 15], "MPRV": [17], "SUM": [18], "MXR": [19],
+            "TVM": [20], "TW": [21], "TSR": [22], "SPLEP": [23], "SDT": [24], 
+            "UXL": [33, 32],"SXL": [35, 34], "SBE": [63], "MBE": [37], 
+            "GVA": [38], "MPV": [39], "MPLEP": [41], "MDT": [42], "SD": [63]
+            }),
+    "misa":     (0x301, 64, {"Extensions": [25, 0]}),
+    "medeleg":  (0x302, 64, {}),
+    "mideleg":  (0x303, 64, {}),
+    "mie":      (0x304, 64, {"SSIE": [1], "MSIE": [3], "STIE": [5], "MTIE": [7],
+                        "SEIE": [9], "MEIE": [11], "LCOFIE": [13]}),
+    "mtvec":    (0x305, 64, {"BASE": [63, 2], "MODE": [1, 0]}),
+    # mcountern
+    "mscratch": (0x340, 64, {}),
+    "mepc":     (0x341, 64, {}),
+    "mcause":   (0x342, 64, {"Interrupt":[63], "Exception_Code": [62, 0]}),
+    "mtval":    (0x343, 64, {}),
+    "mip":      (0x344, 64, {"SSIP": [1], "MSIP": [3], "STIP": [5], "MTIP": [7],
+                        "SEIP": [9], "MEIP": [11], "LCOFIP": [13]}),
     
-CSR_U = {
-    0x000: "ustatus",
-    0x004: "uie",
-    0x005: "utvec",
-    0x040: "uscratch",
-    0x041: "uepc",
-    0x042: "ucause",
-    0x043: "utval",
-    0x044: "uip"
+    # mtinst
+    # mtval2
+    
+    "pmpcfg0":  (0x3a0, 64, {}),
+    "pmpaddr0": (0x3B0, 64, {}),
+    
+    "mnstatus": (0x744, 64, {}),
+    
+    "mcycle":   (0xb00, 64, {}), 
+    "minstret": (0xb02, 64, {}),
+    
+    # "mtime":    (0x000, 64, {}),
+    # "mtimecmp": (0x000, 64, {}),
+    
 }
+
+CSR_S = {
+    "satp":     (0x180, 64, {}), 
+    "stvec":    (0x105, 64, {}), 
+    "scountern":(0x106, 64, {}), 
+}
+
+CSR_U = {
+    "cycle":    (0xc00, 64, {}), 
+    
+}
+ 
+# CSR_U = {
+#     0x000: "ustatus",
+#     0x004: "uie",
+#     0x005: "utvec",
+#     0x040: "uscratch",
+#     0x041: "uepc",
+#     0x042: "ucause",
+#     0x043: "utval",
+#     0x044: "uip"
+# }
 
 # CSR_S = {
 #     0x100: "sstatus",
@@ -165,36 +221,36 @@ CSR_U = {
 #     0x680: "hgatp"
 # }
 
-CSR_M = {
-    0xF11: "mvendorid",
-    0xF12: "marchid",
-    0xF13: "mimpid",
-    0xF14: "mhartid",
-    # 0xF14: "mconfigptr",
+# CSR_M = {
+#     0xF11: "mvendorid",
+#     0xF12: "marchid",
+#     0xF13: "mimpid",
+#     0xF14: "mhartid",
+#     # 0xF14: "mconfigptr",
     
-    0x300: "mstatus",
-    0x301: "misa",
-    0x302: "medeleg",
-    0x303: "mideleg",
-    0x304: "mie",
-    0x305: "mtvec",
-    # 0x306: "mcounteren",
-    # 0x310: "mstatush",   # RV32 only
-    # 0x312: "mdelegh",   # RV32 only
+#     0x300: "mstatus",
+#     0x301: "misa",
+#     0x302: "medeleg",
+#     0x303: "mideleg",
+#     0x304: "mie",
+#     0x305: "mtvec",
+#     # 0x306: "mcounteren",
+#     # 0x310: "mstatush",   # RV32 only
+#     # 0x312: "mdelegh",   # RV32 only
     
-    0x340: "mscratch",
-    0x341: "mepc",
-    0x342: "mcause",
-    0x343: "mtval",
-    0x344: "mip",
-    # 0x345: "mtinst",
-    # 0x346: "mtval2",
+#     0x340: "mscratch",
+#     0x341: "mepc",
+#     0x342: "mcause",
+#     0x343: "mtval",
+#     0x344: "mip",
+#     # 0x345: "mtinst",
+#     # 0x346: "mtval2",
     
-    # 0x3A0: "menvcfg",
-    # 0x3A1: "menvcfgh",     # RV32 only
-    # 0x747: "mseccfg",
-    # 0x757: "mseccfgh",     # RV32 only
-}
+#     # 0x3A0: "menvcfg",
+#     # 0x3A1: "menvcfgh",     # RV32 only
+#     # 0x747: "mseccfg",
+#     # 0x757: "mseccfgh",     # RV32 only
+# }
 
 
 # CSR_DEBUG = {

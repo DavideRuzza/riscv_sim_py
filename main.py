@@ -429,160 +429,65 @@ from typing import List, Dict, Tuple
 
 class RV64Hart():
     
-    def __init__(self, hartid=0, extension_list: List[Ext] = []):
+    def __init__(self, 
+            hartid=0, 
+            bus: SystemInterface = None, 
+            extension_list: List[Ext] = []):
+        
+        
         self.hartid : int = hartid
+        self.sys_bus = bus
         self.ext_list : List[Ext] = [Ext.M]+extension_list
+        self.csr = CsrFile(self.ext_list)
             
     def is_ext_impl(self, e: Ext):
         return e in self.ext_list
 
-
-csr = CsrReg(0x300, "mstatus", 64, {
-        "UIE": [0], "SIE": [1], "MIE": [3], "UPIE": [4], 
-        "SPIE": [5], "MPIE": [7], "SPP": [8], "MPP": [12, 11],
-        "FS": [14, 13], "XS": [16, 15], "MPRV": [17], "SUM": [18],
-        "MXR": [19], "TVM": [20], "TW": [21], "TSR": [22], "SD": [63]
-    })
+    def step(self):
+        return False
+        
 
 
-riscv_csr_fields = {
+setup_logging(logging.DEBUG)
+# setup_logging(logging.CRITICAL)
+
+log = logging.getLogger(__name__)
+
+input_path = Path("tests/rv64/p_test/bin/")
+
+tests = sorted(list(input_path.glob("rv64ui*")))
+length = [len(str(t.stem)) for t in tests]
+# print(*tests, sep="\n")
+
+tests = [Path("tests/rv64/bin/p/rv64mi-p-csr.bin")]
+
+
+for test in tests:
+    # symtab = elf.get_section_by_name('.symtab')
+    print(f"{str(test.stem):<20s}", end='')
+    ram = MemoryDevice.from_binary_file(test, "RAM")
+    sys_bus = SystemInterface()
+    sys_bus.register_device(ram, 0x80000000)
+    sys_bus.write(0x8000_0000, 0x12)
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
+    print()
+    # print(h0.csr)
+    # print
+    # while(h0.step()):
+    #     pass
     
-    "medeleg": (
-        0x302,
-        {
-            "EXCEPTIONS": [63, 0]
-        }
-    ),
-    "mideleg": (
-        0x303,
-        {
-            "INTERRUPTS": [63, 0]
-        }
-    ),
-    "mie": (
-        0x304,
-        {
-            "USIE": [0],
-            "SSIE": [1],
-            "MSIE": [3],
-            "UTIE": [4],
-            "STIE": [5],
-            "MTIE": [7],
-            "UEIE": [8],
-            "SEIE": [9],
-            "MEIE": [11]
-        }
-    ),
-    "mtvec": (
-        0x305,
-        {
-            "BASE": [63, 2],
-            "MODE": [1, 0]
-        }
-    ),
-    "mscratch": (
-        0x340,
-        {
-            "SCRATCH": [63, 0]
-        }
-    ),
-    "mepc": (
-        0x341,
-        {
-            "PC": [63, 0]
-        }
-    ),
-    "mcause": (
-        0x342,
-        {
-            "INTERRUPT": [63],
-            "EXCEPTION_CODE": [62, 0]
-        }
-    ),
-    "mtval": (
-        0x343,
-        {
-            "VALUE": [63, 0]
-        }
-    ),
-    "mip": (
-        0x344,
-        {
-            "USIP": [0],
-            "SSIP": [1],
-            "MSIP": [3],
-            "UTIP": [4],
-            "STIP": [5],
-            "MTIP": [7],
-            "UEIP": [8],
-            "SEIP": [9],
-            "MEIP": [11]
-        }
-    ),
-    "misa":     (0xf14, 64, {"Extensions": [25, 0]}),
-    "mvendorid":(0xf14, 32, {"bank": [31, 7],"Offset": [6, 0],}),
-    "marchid":  (0xf14, 64, {"Architecture_ID": [64, 0]}),
-    "mimpid":   (0xf14, 64, {"Implementation": [64, 0]}),
-    "mhartid":  (0xf14,{"Hart_ID": [63, 0]}),
-    "mstatus":  (0x300,
-        {
-            "UIE": [0], "SIE": [1], "MIE": [3], "UPIE": [4], "SPIE": [5], 
-            "UBE" : [6], "MPIE": [7], "SPP": [8],"VS" : [10, 9], "MPP": [12, 11], 
-            "FS": [14, 13],"XS": [16, 15], "MPRV": [17], "SUM": [18], "MXR": [19],
-            "TVM": [20], "TW": [21], "TSR": [22], "SPLEP": [23], "SDT": [24], 
-            "UXL": [33, 32],"SXL": [35, 34], "SBE": [63], "MBE": [37], 
-            "GVA": [38], "MPV": [39], "MPLEP": [41], "MDT": [42], "SD": [63]
-        }
-    ),
-}
-
-# csr.MPP = 0b11
-# print(csr.MPP)
-
-# r = Reg(32)
-# rs = RegSlice(r, 12, 11)
-
-# rs.val
-
-# csr._blocks['MPP'].val
-
-
-# setup_logging(logging.DEBUG)
-# # setup_logging(logging.CRITICAL)
-
-# log = logging.getLogger(__name__)
-
-# input_path = Path("tests/rv64/p_test/bin/")
-
-# tests = sorted(list(input_path.glob("rv64ui*")))
-# length = [len(str(t.stem)) for t in tests]
-# # print(*tests, sep="\n")
-
-# tests = [Path("tests/rv64/p_test/bin/rv64mi-p-csr.bin")]
-
-
-# for test in tests:
-#     # symtab = elf.get_section_by_name('.symtab')
-#     print(f"{str(test.stem):<20s}", end='')
-#     ram = MemoryDevice.from_binary(test, "RAM")
-#     sys_bus = SystemInterface()
-#     sys_bus.register_device(ram, 0x80000000)
-
-#     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
-#     while(h0.step()):
-#         pass
-    
-#     syscall_code = h0.regfile[17]
-#     syscall_data = h0.regfile[10] 
-#     if syscall_code==93: # exit code
-#         if syscall_data == 0:
-#             print(" ✅ Test PASSED")
-#         else:
-#             print(f" ❌ Test FAILED: {syscall_data>>1}") 
+    # print()
+    # syscall_code = h0.regfile[17]
+    # syscall_data = h0.regfile[10] 
+    # if syscall_code==93: # exit code
+    #     if syscall_data == 0:
+    #         print(" ✅ Test PASSED")
+    #     else:
+    #         print(f" ❌ Test FAILED: {syscall_data>>1}") 
             
-#     print(h0.regfile)
-#     print(h0.csr._csr_str('mstatus'))
-#     del h0
+    # print(h0.regfile)
+    # print(h0.csr._csr_str('mstatus'))
+    del h0
 
 # print(h0.csr)
 # print(hex(h0.pc))
