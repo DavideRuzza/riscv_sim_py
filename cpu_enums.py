@@ -100,16 +100,17 @@ class Ext(Enum):
 class Priviledge(Enum):
     U = 0b00
     S = 0b01
+    H = 0b10
     M = 0b11
 
 
 class Mode(Enum):
     U = 0
     S = 1
-    RES = 2
+    H = 2
     M = 3
 
-class Except(Enum):
+class ExceptionCode(Enum):
     InstructionAddressMisaligned = 0
     InstructionAccessFault = 1
     IllegalInstruction = 2
@@ -151,7 +152,7 @@ CSR_M = {
     # mcountern
     "mscratch": (0x340, 64, {}),
     "mepc":     (0x341, 64, {}),
-    "mcause":   (0x342, 64, {"Interrupt":[63], "Exception_Code": [62, 0]}),
+    "mcause":   (0x342, 64, {"INT":[63], "CODE": [62, 0]}),
     "mtval":    (0x343, 64, {}),
     "mip":      (0x344, 64, {"SSIP": [1], "MSIP": [3], "STIP": [5], "MTIP": [7],
                         "SEIP": [9], "MEIP": [11], "LCOFIP": [13]}),

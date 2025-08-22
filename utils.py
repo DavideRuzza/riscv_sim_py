@@ -168,6 +168,45 @@ class RegSlice():
         else:
             self.reg[self.msb] = value & self.mask
 
+class BlockReg(Reg):
+    
+    def __init__(self, xlen:int, data:int, sections:Dict[str, List[int]]
+        ):
+        super().__init__(xlen, data)
+        
+        # self.reg = Reg(xlen)
+        sections['all'] = [xlen-1, 0]
+        self._blocks = {
+                blk : RegSlice(self, *bits) \
+                    for blk, bits in sections.items()
+            }
+        self.end_attr = True
+
+    def __getattr__(self, attr):
+        if attr in self._blocks:
+            blk = self._blocks[attr]
+            # log.debug(f"CSR block read  {self.name}.{attr}"\
+            #     f" -> 0b{blk.val:0{blk.nbits}b}")
+            return blk.val
+        raise AttributeError(f"{attr} not found")
+
+    def __setattr__(self, attr, value):
+        # If _blocks not yet created → just set attributes normally
+        if attr == "_blocks" or "_blocks" not in self.__dict__:
+            super().__setattr__(attr, value)
+        elif attr in self._blocks:
+            blk = self._blocks[attr]
+            blk.val = value
+            
+            # if attr=='all':
+            #     log.debug(f"CSR write {self.name}"\
+            #         f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
+            # else:
+            #     log.debug(f"CSR block write {self.name}.{attr}"\
+            #         f" <- 0b{blk.val:0{blk.nbits}b}")
+        else:
+            super().__setattr__(attr, value)  # allow normal attributes
+            
 class RegFile:
     def __init__(self, n_regs, bus_size=32, reg_names:list[str]=None):
         self.n_regs = n_regs
@@ -221,7 +260,6 @@ class RegFile:
         return dump_str
 
 class CsrReg(Reg):
-    INIT = False
     
     def __init__(self, 
             addr:int, 
@@ -242,16 +280,16 @@ class CsrReg(Reg):
         self.priv = Mode(addr_reg[9:8])
         
         # self.reg = Reg(xlen)
-        
+        sections['all'] = [xlen-1, 0]
         self._blocks = {
                 blk : RegSlice(self, *bits) \
                     for blk, bits in sections.items()
             }
+        self.end_attr = True
 
     def __getattr__(self, attr):
         if attr in self._blocks:
             blk = self._blocks[attr]
-            
             log.debug(f"CSR block read  {self.name}.{attr}"\
                 f" -> 0b{blk.val:0{blk.nbits}b}")
             return blk.val
@@ -264,15 +302,20 @@ class CsrReg(Reg):
         elif attr in self._blocks:
             blk = self._blocks[attr]
             blk.val = value
-            log.debug(f"CSR block write {self.name}.{attr}"\
-                f" <- 0b{blk.val:0{blk.nbits}b}")
+            
+            if attr=='all':
+                log.debug(f"CSR write {self.name}"\
+                    f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
+            else:
+                log.debug(f"CSR block write {self.name}.{attr}"\
+                    f" <- 0b{blk.val:0{blk.nbits}b}")
         else:
             super().__setattr__(attr, value)  # allow normal attributes
 
 #########################
 
 class CsrFile():
-
+    # TODO: implement attr get and set and log print on read. write is done
 
     def __init__(self, ext_list: List[Ext]):     
         
@@ -295,14 +338,14 @@ class CsrFile():
             self.csr_map[addr] = CsrReg(addr, name, xlen, block_map)
             self.name_to_addr[name] = addr
     
+    
     def __getitem__(self, key):
         
         addr = key
         if type(key) == str:
             addr = self.name_to_addr[key]
         csr_reg = self.csr_map[addr]
-        # log.debug(f"CSR block read  {self.name}.{attr}"\
-        #         f" -> 0b{blk.val:0{blk.nbits}b}")
+
         return csr_reg
 
     def __setitem__(self, key, value):
@@ -314,7 +357,14 @@ class CsrFile():
         csr_reg[:] = value&((1<<csr_reg.nbits)-1)
         log.debug(f"CSR write {csr_reg.name}"\
                 f" -> 0x{csr_reg[:]:0{int(csr_reg.nbits/4)}X}")
-        
+    
+    def __getattr__(self, attr):
+        if attr in self.name_to_addr:
+            addr = self.name_to_addr[attr]
+            csr_reg = self.csr_map[addr]
+            return csr_reg
+        raise AttributeError(f"{attr} not found")
+    
     def __repr__(self):
         max_len = max([len(i) for i in self.name_to_addr.keys()])
         

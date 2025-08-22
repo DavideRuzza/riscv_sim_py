@@ -426,36 +426,90 @@ from typing import List, Dict, Tuple
 #         extension_value = sum([ex.value for ex in self.extensions]) & self.mask64
 #         return bool(extension_value&e.value)
 
+INSTR_BLK_MAP = {
+    "opcode" : [6, 0],
+    "I_f12" : [31,20],
+    "I_f7" : [31,25],
+    "I_f3" : [14,12],
+    "I_rd" : [11,7],
+    "I_rs1" : [19,15],
+    "I_rs2" : [24,20],
+    "I_csr" : [31,20]    
+}
+
+
 
 class RV64Hart():
     
+    xlen=64
+    
+    reg_names=['ze', 'ra', 'sp', 'gp', 'tp', 't0', 't1', 't2', 's0', 's1', 
+    'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 's2',
+    's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10', 's11', 
+    't3', 't4', 't5', 't6']
+
     def __init__(self, 
             hartid, 
             bus: SystemInterface = None, 
             extension_list: List[Ext] = [],
-            entry_point = 0x8000_000):
+            entry_point = 0x8000_0000):
         
         
+        self.mask64 = 0xffff_ffff_ffff_ffff
+        self.mask32 = 0xffff_ffff
+
         self.hartid : int = hartid
         self.sys_bus = bus
         self.ext_list : List[Ext] = [Ext.M]+extension_list
+        
+        self.regfile = RegFile(32, self.xlen, self.reg_names)
         self.csr = CsrFile(self.ext_list)
+        self.pc_rst = entry_point
         
         self.mode = Mode.M
         self.pc = entry_point
         
-        self.csr['misa'].Extensions = sum([e.value for e in self.ext_list])
-        self.csr['misa'].MXLEN = 2 # for 64bit
-        self.csr['mhartid'] = self.hartid
-        self.csr['mstatus'].MPP = self.mode.value # set M mode state
-        self.csr['mstatus'].SXL = 2 # for 64bit s-mode
-        self.csr['mstatus'].UXL = 2 # for 64bit u-mode
+        self.exception_list : List[ExceptionCode] = []
+                
+        # setup csr registers
+        self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
+        self.csr.misa.MXLEN = 2 # for 64bit
+        self.csr.mhartid = self.hartid
+        self.csr.mstatus.MPP = self.mode.value # set M mode state
+        if self.is_ext_impl(Ext.S) : self.csr.mstatus.SXL = 2 # for 64bit s-mode
+        if self.is_ext_impl(Ext.U) : self.csr.mstatus.UXL = 2 # for 64bit u-mode
         
     def is_ext_impl(self, e: Ext):
         return e in self.ext_list
 
+    def raiseException(self, e: ExceptionCode):
+        self.exception_list.append(e)
+        
+    def handleException(self):
+        if len(self.exception_list)>0:
+            e = self.exception_list.pop()
+            self.csr.mepc.all = self.pc
+            self.pc = self.csr.mtvec.BASE<<2
+            self.mcause.INT = 0b0 # is an exception, not an interrupt
+            self.mcause.CODE = e.value
+            self.mstatus.MPP = self.mode.value
+            
+            # TODO: for now is ok but later check medeleg for delegation. 
+            self.mode = Mode.M
+            
     def step(self):
+        
+        # fetch instruction
+        inst = BlockReg(32, self.sys_bus.read(self.pc), INSTR_BLK_MAP)
+        
+        op = Ops(inst.opcode)
+        log.info(op)
+        log.info(inst.I_rs1)
+        
+        self.handleException()
+        
         return False
+        
 
 setup_logging(logging.DEBUG)
 # setup_logging(logging.CRITICAL)
@@ -469,7 +523,8 @@ sys_bus.register_device(ram, 0x8000_0000)
 # ram.hexdump()
 h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
 # print(h0.csr.csr_map[3857].nbits)
-
+while(h0.step()):
+    pass
 
 # input_path = Path("tests/rv64/p_test/bin/")
 
