@@ -109,6 +109,24 @@ class Mode(Enum):
     RES = 2
     M = 3
 
+class Except(Enum):
+    InstructionAddressMisaligned = 0
+    InstructionAccessFault = 1
+    IllegalInstruction = 2
+    Breakpoint = 3
+    LoadAddressMisaligned = 4
+    LoadAccessFault = 5
+    StoreAmoAddressMisaligned = 6
+    StoreAmoAccessFault = 7
+    Ucall = 8
+    Scall = 9
+    Mcall = 11
+    InstructionPageFault = 12
+    LoadPageFault = 13
+    StoreAmoPageFault = 15
+    DoubleTrap = 16
+    SoftwareSheck = 18
+    HardwareError = 19
 
 CSR_M = {    
     "mvendorid":(0xf11, 32, {"bank": [31, 7],"Offset": [6, 0]}),
@@ -124,7 +142,7 @@ CSR_M = {
             "UXL": [33, 32],"SXL": [35, 34], "SBE": [63], "MBE": [37], 
             "GVA": [38], "MPV": [39], "MPLEP": [41], "MDT": [42], "SD": [63]
             }),
-    "misa":     (0x301, 64, {"Extensions": [25, 0]}),
+    "misa":     (0x301, 64, {"MXLEN": [63, 62], "Extensions": [25, 0]}),
     "medeleg":  (0x302, 64, {}),
     "mideleg":  (0x303, 64, {}),
     "mie":      (0x304, 64, {"SSIE": [1], "MSIE": [3], "STIE": [5], "MTIE": [7],

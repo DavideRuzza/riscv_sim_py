@@ -4,6 +4,10 @@ from enum import Enum
 from cpu_enums import *
 from typing import Dict, List, Tuple
 
+import logging
+
+log = logging.getLogger(__name__)
+
 UNICODE = True
 
 if UNICODE:
@@ -130,9 +134,7 @@ class Reg:
             return self[:] & (other & self.mask)
         if isinstance(other, Reg):
             return self[:] & other[:]
-    
-    
-            
+         
     def __str__(self):
         return "%x"%self.reg
 
@@ -143,22 +145,25 @@ class RegSlice():
         self.reg : Reg = reg
         self.msb : int = msb
         self.lsb : int = lsb
+        self.nbits : int 
         
-        if lsb:
+        if lsb!=None:
             self.mask : int = (1<<(msb-lsb+1))-1
+            self.nbits = msb-lsb
         else:
             self.mask = 0b1
+            self.nbits = 1
         
     @property
     def val(self)->int:
-        if self.lsb:
+        if self.lsb!=None:
             return self.reg[self.msb:self.lsb]
         else:
             return self.reg[self.msb]
 
     @val.setter
     def val(self, value : int):
-        if self.lsb:
+        if self.lsb!=None:
             self.reg[self.msb:self.lsb] = value & self.mask
         else:
             self.reg[self.msb] = value & self.mask
@@ -228,6 +233,7 @@ class CsrReg(Reg):
         
         # sections be like {"name": [12,0], "name1": [20:13], ... }
         # this will create n regslices referencing the csr bloks
+        # self.xlen = xlen
         self.addr = addr
         self.name = name
     
@@ -238,35 +244,40 @@ class CsrReg(Reg):
         # self.reg = Reg(xlen)
         
         self._blocks = {
-                name : RegSlice(self, *bits) \
-                    for name, bits in sections.items()
+                blk : RegSlice(self, *bits) \
+                    for blk, bits in sections.items()
             }
-           
+
     def __getattr__(self, attr):
         if attr in self._blocks:
-            return self._blocks[attr].val
+            blk = self._blocks[attr]
+            
+            log.debug(f"CSR block read  {self.name}.{attr}"\
+                f" -> 0b{blk.val:0{blk.nbits}b}")
+            return blk.val
         raise AttributeError(f"{attr} not found")
 
-    def __setattr__(self, name, value):
+    def __setattr__(self, attr, value):
         # If _blocks not yet created → just set attributes normally
-        if name == "_blocks" or "_blocks" not in self.__dict__:
-            super().__setattr__(name, value)
-        elif name in self._blocks:
-            self._blocks[name].val = value
+        if attr == "_blocks" or "_blocks" not in self.__dict__:
+            super().__setattr__(attr, value)
+        elif attr in self._blocks:
+            blk = self._blocks[attr]
+            blk.val = value
+            log.debug(f"CSR block write {self.name}.{attr}"\
+                f" <- 0b{blk.val:0{blk.nbits}b}")
         else:
-            super().__setattr__(name, value)  # allow normal attributes
+            super().__setattr__(attr, value)  # allow normal attributes
 
 #########################
 
 class CsrFile():
 
 
-    def __init__(self, ext_list: List[Ext]):
-        
-        self.csr : Dict[int, Reg] = {}
+    def __init__(self, ext_list: List[Ext]):     
         
         self.ext_list = ext_list 
-        self.crs_map : Dict[int, CsrReg]= {}
+        self.csr_map : Dict[int, CsrReg] = {}
         self.name_to_addr : Dict[str, int] = {}
             
         for ext in self.ext_list:
@@ -281,9 +292,29 @@ class CsrFile():
         
         for name, value in csr_dict.items():
             addr, xlen, block_map = value
-            self.crs_map[addr] = CsrReg(addr, name, xlen, block_map)
+            self.csr_map[addr] = CsrReg(addr, name, xlen, block_map)
             self.name_to_addr[name] = addr
     
+    def __getitem__(self, key):
+        
+        addr = key
+        if type(key) == str:
+            addr = self.name_to_addr[key]
+        csr_reg = self.csr_map[addr]
+        # log.debug(f"CSR block read  {self.name}.{attr}"\
+        #         f" -> 0b{blk.val:0{blk.nbits}b}")
+        return csr_reg
+
+    def __setitem__(self, key, value):
+        
+        addr = key
+        if type(key) == str:
+            addr = self.name_to_addr[key]
+        csr_reg = self.csr_map[addr]
+        csr_reg[:] = value&((1<<csr_reg.nbits)-1)
+        log.debug(f"CSR write {csr_reg.name}"\
+                f" -> 0x{csr_reg[:]:0{int(csr_reg.nbits/4)}X}")
+        
     def __repr__(self):
         max_len = max([len(i) for i in self.name_to_addr.keys()])
         
@@ -295,7 +326,7 @@ class CsrFile():
         rst = COL['rst']
         bold = COL['bold']
         ul = COL['underline']
-        for addr, csr in self.crs_map.items():
+        for addr, csr in self.csr_map.items():
             
             out.append(f"* {y}0x{addr:03X} {g}{ul}{csr.name}{rst} "\
                 f"{gr}{bold}{'-'*(max_len-len(csr.name))}{gr}" \
@@ -304,6 +335,8 @@ class CsrFile():
                 )
             
         return "\n".join(out)
+    
+    
 
 
 def int_64(uint_64):

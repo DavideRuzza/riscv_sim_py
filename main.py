@@ -430,47 +430,67 @@ from typing import List, Dict, Tuple
 class RV64Hart():
     
     def __init__(self, 
-            hartid=0, 
+            hartid, 
             bus: SystemInterface = None, 
-            extension_list: List[Ext] = []):
+            extension_list: List[Ext] = [],
+            entry_point = 0x8000_000):
         
         
         self.hartid : int = hartid
         self.sys_bus = bus
         self.ext_list : List[Ext] = [Ext.M]+extension_list
         self.csr = CsrFile(self.ext_list)
-            
+        
+        self.mode = Mode.M
+        self.pc = entry_point
+        
+        self.csr['misa'].Extensions = sum([e.value for e in self.ext_list])
+        self.csr['misa'].MXLEN = 2 # for 64bit
+        self.csr['mhartid'] = self.hartid
+        self.csr['mstatus'].MPP = self.mode.value # set M mode state
+        self.csr['mstatus'].SXL = 2 # for 64bit s-mode
+        self.csr['mstatus'].UXL = 2 # for 64bit u-mode
+        
     def is_ext_impl(self, e: Ext):
         return e in self.ext_list
 
     def step(self):
         return False
-        
-
 
 setup_logging(logging.DEBUG)
 # setup_logging(logging.CRITICAL)
 
 log = logging.getLogger(__name__)
 
-input_path = Path("tests/rv64/p_test/bin/")
+test = Path("tests/rv64/bin/p/rv64mi-p-csr.bin")
+ram = MemoryDevice.from_binary_file(test, "RAM")
+sys_bus = SystemInterface()
+sys_bus.register_device(ram, 0x8000_0000)
+# ram.hexdump()
+h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
+# print(h0.csr.csr_map[3857].nbits)
 
-tests = sorted(list(input_path.glob("rv64ui*")))
-length = [len(str(t.stem)) for t in tests]
-# print(*tests, sep="\n")
 
-tests = [Path("tests/rv64/bin/p/rv64mi-p-csr.bin")]
+# input_path = Path("tests/rv64/p_test/bin/")
+
+# tests = sorted(list(input_path.glob("rv64ui*")))
+# length = [len(str(t.stem)) for t in tests]
+# # print(*tests, sep="\n")
+
+# tests = [Path("tests/rv64/bin/p/rv64mi-p-csr.bin")]
 
 
-for test in tests:
-    # symtab = elf.get_section_by_name('.symtab')
-    print(f"{str(test.stem):<20s}", end='')
-    ram = MemoryDevice.from_binary_file(test, "RAM")
-    sys_bus = SystemInterface()
-    sys_bus.register_device(ram, 0x80000000)
-    sys_bus.write(0x8000_0000, 0x12)
-    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
-    print()
+# for test in tests:
+#     # symtab = elf.get_section_by_name('.symtab')
+#     print(f"{str(test.stem):<20s}", end='')
+#     print()
+#     ram = MemoryDevice.from_binary_file(test, "RAM")
+#     sys_bus = SystemInterface()
+#     sys_bus.register_device(ram, 0x8000_0000)
+#     # ram.hexdump()
+#     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
+    # print(*h0.csr.csr_map)
+    # print(h0.csr.csr_map[768])
     # print(h0.csr)
     # print
     # while(h0.step()):
@@ -487,7 +507,7 @@ for test in tests:
             
     # print(h0.regfile)
     # print(h0.csr._csr_str('mstatus'))
-    del h0
+    # del h0
 
 # print(h0.csr)
 # print(hex(h0.pc))

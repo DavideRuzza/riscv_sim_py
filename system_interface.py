@@ -54,7 +54,6 @@ class SystemInterface():
         raise Exception(f"no device registered in 0x{addr:X}")
     
     def write(self, addr: int, value: int, size: int = 4):
-        
         for mem in self.mem_map:
             st, end = mem
         
