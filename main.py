@@ -559,31 +559,29 @@ class RV64Hart():
             ins[20]<<11 | ins[30:21] << 1, 20) & self.mask64
         # ---------------------------- EXECUTE ------------------------------- #
         
+        if op in [Ops.JAL, Ops.OP, Ops.OP_32, Ops.OP_IMM, Ops.JALR,
+                    Ops.OP_IMM_32, Ops.AUIPC, Ops.LUI, Ops.LOAD ]:
+            
+            self.write_back=True
         if op==Ops.JAL:
             self.new_pc = self.pc+j_imm
             new_rd = pc_plus_4
-            self.write_back=True
+        elif op==Ops.JALR:
+            self.new_pc = (r1 + i_imm) & (self.mask64-1)
+            new_rd = pc_plus_4
         elif op==Ops.OP:
-            
             new_rd = alu(r1, r2, OP_F3(ins.I_f3), ins.I_f7)
-            self.write_back = True
-                            
         elif op==Ops.OP_32:
             f3 = OP_F3(ins.I_f3)
             res32 = alu(r1, r2, f3, ins.I_f7, True) 
             new_rd = sign_extend(res32 & self.mask32, 32)
-            self.write_back = True
-            
         elif op==Ops.OP_IMM:
             f3 = OP_F3(ins.I_f3)
             new_rd = alu(r1, i_imm, f3, ins.I_f7 if f3!=OP_F3.ADD_SUB else 0)
-            self.write_back = True
-        
         elif op==Ops.OP_IMM_32:
             f3 = OP_F3(ins.I_f3)
             res32 = alu(r1, i_imm, f3, ins.I_f7 if f3!=OP_F3.ADD_SUB else 0, True) 
             new_rd = sign_extend(res32 & self.mask32, 32)
-            self.write_back = True
         elif op==Ops.BRANCH:
             if branch_unit(r1, r2, BR_F3(ins.I_f3)):
                 log.info("taken")
@@ -592,15 +590,26 @@ class RV64Hart():
                 log.info("not taken")
         elif op==Ops.AUIPC:
             new_rd = self.pc + u_imm
-            self.write_back=True
         elif op==Ops.LUI:
             new_rd = u_imm
-            self.write_back=True
         elif op==Ops.MISC_MEM:
             pass
+        elif op==Ops.STORE:
+            addr = ( r1 + s_imm) & self.mask64            
+            if addr == 0x80001000 or addr == 0x80001004:
+                log.error("__to_host__")
+                return False
+            self.sys_bus.write(addr, r2, 1<<ins.I_f3)
+        elif op==Ops.LOAD:
+            addr = ( r1 + i_imm) & self.mask64
+            # LBU, LHU, LWU are just the same but with the bit 0b100
+            size_byte = 1<<(ins.I_f3&0b11) 
+            new_rd = self.sys_bus.read(addr, size_byte)
+            f3_l = LD_F3(f3)
+            if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
+                new_rd = sign_extend(new_rd, size_byte*8)
+                
         elif op==Ops.SYSTEM:
-            
-            
             if ins.I_f3 == 0:
                 f12 = SYS_F12(ins.I_f12)
                 if f12==SYS_F12.MRET:
@@ -621,7 +630,7 @@ class RV64Hart():
                 
                 new_rd = csr_value
                 self.write_back = True
-                
+            
                 # immediate csr instruction differs from the 2 bit in f3
                 # for I instruction instead of the content of r1 they use 
                 # r1 position as immediate
@@ -665,7 +674,7 @@ class RV64Hart():
         
         # breakpoint
 
-        if self.pc==0x8000_03e8:
+        if self.pc==0x8000_0688:
             print(f"self.new_pc: 0x{self.new_pc & self.mask64:8x}")
             print(hex(self.csr['mtvec'][1:0]))
             return False
@@ -680,53 +689,49 @@ setup_logging(logging.DEBUG)
 
 log = logging.getLogger(__name__)
 
-test = Path("tests/rv64/bin/p/rv64mi-p-csr.bin")
-ram = MemoryDevice.from_binary_file(test, "RAM")
-sys_bus = SystemInterface()
-sys_bus.register_device(ram, 0x8000_0000)
-# ram.hexdump()
-h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
-# print(h0.csr.csr_map[3857].nbits)
-while(h0.step()):
-    pass
+# test = Path("tests/rv64/bin/p/rv64mi-p-csr.bin")
+# ram = MemoryDevice.from_binary_file(test, "RAM")
+# sys_bus = SystemInterface()
+# sys_bus.register_device(ram, 0x8000_0000)
+# # ram.hexdump()
+# h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
+# # print(h0.csr.csr_map[3857].nbits)
+# while(h0.step()):
+#     pass
 
-# input_path = Path("tests/rv64/p_test/bin/")
+input_path = Path("tests/rv64/bin/p")
 
-# tests = sorted(list(input_path.glob("rv64ui*")))
-# length = [len(str(t.stem)) for t in tests]
-# # print(*tests, sep="\n")
+tests = sorted(list(input_path.glob("rv64ui*")))
+length = [len(str(t.stem)) for t in tests]
+# print(*tests, sep="\n")
 
 # tests = [Path("tests/rv64/bin/p/rv64mi-p-csr.bin")]
 
+# print(tests[0])
+for test in tests:
+    # symtab = elf.get_section_by_name('.symtab')
+    print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
+    ram = MemoryDevice.from_binary_file(test, "RAM")
+    sys_bus = SystemInterface()
+    sys_bus.register_device(ram, 0x8000_0000)
+    # ram.hexdump()
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
 
-# for test in tests:
-#     # symtab = elf.get_section_by_name('.symtab')
-#     print(f"{str(test.stem):<20s}", end='')
-#     print()
-#     ram = MemoryDevice.from_binary_file(test, "RAM")
-#     sys_bus = SystemInterface()
-#     sys_bus.register_device(ram, 0x8000_0000)
-#     # ram.hexdump()
-#     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
-    # print(*h0.csr.csr_map)
-    # print(h0.csr.csr_map[768])
-    # print(h0.csr)
-    # print
-    # while(h0.step()):
-    #     pass
+    while(h0.step()):
+        pass
     
-    # print()
-    # syscall_code = h0.regfile[17]
-    # syscall_data = h0.regfile[10] 
-    # if syscall_code==93: # exit code
-    #     if syscall_data == 0:
-    #         print(" ✅ Test PASSED")
-    #     else:
-    #         print(f" ❌ Test FAILED: {syscall_data>>1}") 
+    syscall_code = h0.regfile[17]
+    syscall_data = h0.regfile[10] 
+    if syscall_code==93: # exit code
+        if syscall_data == 0:
+            print(" ✅ Test PASSED")
+        else:
+            print(f" ❌ Test FAILED: {syscall_data>>1}") 
             
     # print(h0.regfile)
     # print(h0.csr._csr_str('mstatus'))
-    # del h0
+    del h0
+    break
 
 # print(h0.csr)
 # print(hex(h0.pc))

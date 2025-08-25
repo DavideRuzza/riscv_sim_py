@@ -290,8 +290,12 @@ class CsrReg(Reg):
     def __getattr__(self, attr):
         if attr in self._blocks:
             blk = self._blocks[attr]
-            log.debug(f"CSR block read  {self.name}.{attr}"\
-                f" -> 0b{blk.val:0{blk.nbits}b}")
+            if blk.nbits>15:
+                log.debug(f"CSR block read {self.name}.{attr}"\
+                    f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
+            else:
+                log.debug(f"CSR block read {self.name}.{attr}"\
+                    f" -> 0b{blk.val:0{blk.nbits}b}")
             return blk.val
         raise AttributeError(f"{attr} not found")
 
@@ -307,8 +311,12 @@ class CsrReg(Reg):
                 log.debug(f"CSR write {self.name}"\
                     f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
             else:
-                log.debug(f"CSR block write {self.name}.{attr}"\
-                    f" <- 0b{blk.val:0{blk.nbits}b}")
+                if blk.nbits>15:
+                    log.debug(f"CSR block write {self.name}.{attr}"\
+                        f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
+                else:
+                    log.debug(f"CSR block write {self.name}.{attr}"\
+                        f" <- 0b{blk.val:0{blk.nbits}b}")
         else:
             super().__setattr__(attr, value)  # allow normal attributes
 

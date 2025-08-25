@@ -47,7 +47,7 @@ class OP_F3(Enum):
     OR = 0b110 
     AND = 0b111
     
-class LOAD_F3(Enum):
+class LD_F3(Enum):
     LB = 0b000
     LH = 0b001
     LW = 0b010
@@ -56,7 +56,7 @@ class LOAD_F3(Enum):
     LHU = 0b101
     LD = 0b011
 
-class STORE_F3(Enum):
+class ST_F3(Enum):
     SB = 0b000
     SH = 0b001
     SW = 0b010
@@ -71,12 +71,11 @@ class BR_F3(Enum):
     BGEU = 0b111
     
 class CSR_F3(Enum):
-    ECALL = EBREAK = 0b000
-    CSRRW = 0b001
-    CSRRS = 0b010
-    CSRRC = 0b011
+    CSRRW  = 0b001
     CSRRWI = 0b101
+    CSRRS  = 0b010
     CSRRSI = 0b110
+    CSRRC  = 0b011
     CSRRCI = 0b111
     
 
@@ -179,9 +178,15 @@ CSR_M = {
     "mcycle":   (0xb00, 64, {}), 
     "minstret": (0xb02, 64, {}),
     
+    
     # "mtime":    (0x000, 64, {}),
     # "mtimecmp": (0x000, 64, {}),
-    
+    ##### DEBUG #######
+    "tcontrol": (0x7a5, 64, {"MPTE" : [7], "MPE":[3]}),
+    "tselect": (0x7a0, 64, {}),
+    "tdata1": (0x7a1, 64, {}),
+    "tdata2": (0x7a2, 64, {}),
+    "tdata3": (0x7a3, 64, {}),
 }
 
 CSR_S = {
