@@ -452,7 +452,8 @@ class RV64Hart():
             hartid, 
             bus: SystemInterface = None, 
             extension_list: List[Ext] = [],
-            entry_point = 0x8000_0000):
+            entry_point = 0x8000_0000,
+            to_host_addr = 0x8000_1000):
         
         
         self.mask64 = 0xffff_ffff_ffff_ffff
@@ -470,7 +471,8 @@ class RV64Hart():
         self.pc = entry_point
         
         self.exception_list : List[ExceptionCode] = []
-                
+        self.to_host_addr = to_host_addr
+         
         # setup csr registers
         self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
         self.csr.misa.MXLEN = 2 # for 64bit
@@ -482,17 +484,22 @@ class RV64Hart():
         self.terminate = False # used to stop the process whethever bad happends
 
     def is_ext_impl(self, e: Ext):
-        return e in self.ext_list
+        return (e in self.ext_list)
 
     def raiseException(self, e: ExceptionCode):
         self.exception_list.append(e)
         
     def handleException(self):
         if len(self.exception_list)>0:
-            # log.error("--- Runtime Error ---")
+            log.error("--- Exception ---")
             e = self.exception_list.pop()
             self.csr.mepc.all = self.pc
-            self.new_pc = self.csr.mtvec.all #BASE<<2
+            self.new_pc = self.csr.mtvec.BASE<<2
+            
+            #check for vectored interrupt
+            if self.csr.mtvec.MODE==1:
+                log.error("--- Exception ---")
+                self.new_pc += 4*e.value
             
             self.csr.mcause.INT = 0b0 # is an exception, not an interrupt
             self.csr.mcause.CODE = e.value
@@ -512,13 +519,15 @@ class RV64Hart():
         self.csr.mstatus.MIE = self.csr.mstatus.MPIE
         self.csr.mstatus.MPIE = 1
         
-        if (self.csr.mstatus.MPP == 0b00):
+        mpp = self.csr.mstatus.MPP
+        if (mpp == 0b00):
             self.set_mode(Mode.U)
-        elif (self.csr.mstatus.MPP == 0b01):
+        elif (mpp == 0b01):
             self.set_mode(Mode.S)
-        elif (self.csr.mstatus.MPP == 0b11):
+        elif (mpp == 0b11):
             self.set_mode(Mode.M)
         
+        # print("IMPL", self.is_ext_impl(Ext.U))
         self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
         return self.csr.mepc.all
      
@@ -541,14 +550,17 @@ class RV64Hart():
         # ---------------------------- DECODE -------------------------------- #
         
         
-        op = Ops(ins.opcode) 
+        op = Ops(ins.opcode)
         
-        log.info(op)
+        
         
         if not self.handleException(): return False
+        
+        
+        log.info(op)
                 
         r1 = self.regfile[ins.I_rs1]
-        r2 = self.regfile[ins.I_rs1]
+        r2 = self.regfile[ins.I_rs2]
         
         i_imm = sign_extend(ins[31:20], 12) & self.mask64
         s_imm = sign_extend(ins[31:25]<<5 | ins[11:7], 12) & self.mask64
@@ -561,9 +573,11 @@ class RV64Hart():
         
         if op in [Ops.JAL, Ops.OP, Ops.OP_32, Ops.OP_IMM, Ops.JALR,
                     Ops.OP_IMM_32, Ops.AUIPC, Ops.LUI, Ops.LOAD ]:
-            
             self.write_back=True
-        if op==Ops.JAL:
+        
+        if op==Ops.ILLEGAL:
+            self.raiseException(ExceptionCode.IllegalInstruction) 
+        elif op==Ops.JAL:
             self.new_pc = self.pc+j_imm
             new_rd = pc_plus_4
         elif op==Ops.JALR:
@@ -583,6 +597,7 @@ class RV64Hart():
             res32 = alu(r1, i_imm, f3, ins.I_f7 if f3!=OP_F3.ADD_SUB else 0, True) 
             new_rd = sign_extend(res32 & self.mask32, 32)
         elif op==Ops.BRANCH:
+            # print(hex(r1), hex(r2))
             if branch_unit(r1, r2, BR_F3(ins.I_f3)):
                 log.info("taken")
                 self.new_pc = self.pc + b_imm
@@ -595,8 +610,8 @@ class RV64Hart():
         elif op==Ops.MISC_MEM:
             pass
         elif op==Ops.STORE:
-            addr = ( r1 + s_imm) & self.mask64            
-            if addr == 0x80001000 or addr == 0x80001004:
+            addr = ( r1 + s_imm) & self.mask64    
+            if (addr == self.to_host_addr):
                 log.error("__to_host__")
                 return False
             self.sys_bus.write(addr, r2, 1<<ins.I_f3)
@@ -605,7 +620,7 @@ class RV64Hart():
             # LBU, LHU, LWU are just the same but with the bit 0b100
             size_byte = 1<<(ins.I_f3&0b11) 
             new_rd = self.sys_bus.read(addr, size_byte)
-            f3_l = LD_F3(f3)
+            f3_l = LD_F3(ins.I_f3)
             if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
                 new_rd = sign_extend(new_rd, size_byte*8)
                 
@@ -626,6 +641,7 @@ class RV64Hart():
             else:
                 f3 = CSR_F3(ins.I_f3)
                 csr_key = ins.I_f12
+                # print(hex(csr_key))
                 csr_value = self.csr[csr_key].all
                 
                 new_rd = csr_value
@@ -674,12 +690,13 @@ class RV64Hart():
         
         # breakpoint
 
-        if self.pc==0x8000_0688:
+        if self.pc==0x8000_0198:
             print(f"self.new_pc: 0x{self.new_pc & self.mask64:8x}")
             print(hex(self.csr['mtvec'][1:0]))
+            print(hex(self.csr['mstatus'].all))
             return False
 
-        self.pc = self.new_pc
+        self.pc = self.new_pc & self.mask64
         
         return True
         
@@ -687,25 +704,15 @@ class RV64Hart():
 setup_logging(logging.DEBUG)
 # setup_logging(logging.CRITICAL)
 
+
 log = logging.getLogger(__name__)
-
-# test = Path("tests/rv64/bin/p/rv64mi-p-csr.bin")
-# ram = MemoryDevice.from_binary_file(test, "RAM")
-# sys_bus = SystemInterface()
-# sys_bus.register_device(ram, 0x8000_0000)
-# # ram.hexdump()
-# h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
-# # print(h0.csr.csr_map[3857].nbits)
-# while(h0.step()):
-#     pass
-
 input_path = Path("tests/rv64/bin/p")
 
-tests = sorted(list(input_path.glob("rv64ui*")))
+tests = sorted(list(input_path.glob("rv64mi*")))
 length = [len(str(t.stem)) for t in tests]
 # print(*tests, sep="\n")
 
-# tests = [Path("tests/rv64/bin/p/rv64mi-p-csr.bin")]
+tests = [Path("tests/rv64/bin/p/rv64mi-p-csr.bin")]
 
 # print(tests[0])
 for test in tests:
@@ -715,8 +722,13 @@ for test in tests:
     sys_bus = SystemInterface()
     sys_bus.register_device(ram, 0x8000_0000)
     # ram.hexdump()
-    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U])
-
+    to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
+    # h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr = to_host_addr)
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr = to_host_addr)
+    
+    print(h0.csr.mstatus)
+    
+    break
     while(h0.step()):
         pass
     
@@ -726,12 +738,16 @@ for test in tests:
         if syscall_data == 0:
             print(" ✅ Test PASSED")
         else:
-            print(f" ❌ Test FAILED: {syscall_data>>1}") 
+            print(f" ❌ Test FAILED: {syscall_data>>1}")
+    else:
+        print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
             
-    # print(h0.regfile)
+    # print(h0.csr.mstatus)
+    print(h0.regfile)
+
     # print(h0.csr._csr_str('mstatus'))
     del h0
-    break
+    # break
 
 # print(h0.csr)
 # print(hex(h0.pc))

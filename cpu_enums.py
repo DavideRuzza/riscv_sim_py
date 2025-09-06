@@ -3,6 +3,7 @@ from enum import Enum
 
 class Ops(Enum):
 
+    ILLEGAL = 0b00_000_00
     LOAD = 0b00_000_11
     STORE = 0b01_000_11
     MADD = 0b10_000_11
@@ -140,11 +141,11 @@ class ExceptionCode(Enum):
     HardwareError = 19
 
 CSR_M = {    
-    "mvendorid":(0xf11, 32, {"bank": [31, 7],"Offset": [6, 0]}),
-    "marchid":  (0xf12, 64, {"Architecture_ID": [63, 0]}),
-    "mimpid":   (0xf13, 64, {"Implementation": [63, 0]}),
-    "mhartid":  (0xf14, 64, {"Hart_ID": [63, 0]}),
-    "mconfigptr": (0xf15, 64, {}),
+    "mvendorid":(0xf11, 32, {"bank": [31, 7],"Offset": [6, 0]}, {}),
+    "marchid":  (0xf12, 64, {"Architecture_ID": [63, 0]}, {}),
+    "mimpid":   (0xf13, 64, {"Implementation": [63, 0]}, {}),
+    "mhartid":  (0xf14, 64, {"Hart_ID": [63, 0]}, {}),
+    "mconfigptr": (0xf15, 64, {}, {}),
     "mstatus":  (0x300, 64, {
             "UIE": [0], "SIE": [1], "MIE": [3], "UPIE": [4], "SPIE": [5], 
             "UBE" : [6], "MPIE": [7], "SPP": [8],"VS" : [10, 9], "MPP": [12, 11], 
@@ -152,51 +153,54 @@ CSR_M = {
             "TVM": [20], "TW": [21], "TSR": [22], "SPLEP": [23], "SDT": [24], 
             "UXL": [33, 32],"SXL": [35, 34], "SBE": [63], "MBE": [37], 
             "GVA": [38], "MPV": [39], "MPLEP": [41], "MDT": [42], "SD": [63]
-            }),
-    "misa":     (0x301, 64, {"MXLEN": [63, 62], "Extensions": [25, 0]}),
-    "medeleg":  (0x302, 64, {}),
-    "mideleg":  (0x303, 64, {}),
+            },
+            {"SXL": [0b01, 0b10, 0b11], 
+             "UXL": [0b01, 0b10, 0b11]}),
+    
+    "misa":     (0x301, 64, {"MXLEN": [63, 62], "Extensions": [25, 0]}, {}),
+    "medeleg":  (0x302, 64, {}, {}),
+    "mideleg":  (0x303, 64, {}, {}),
     "mie":      (0x304, 64, {"SSIE": [1], "MSIE": [3], "STIE": [5], "MTIE": [7],
-                        "SEIE": [9], "MEIE": [11], "LCOFIE": [13]}),
-    "mtvec":    (0x305, 64, {"BASE": [63, 2], "MODE": [1, 0]}),
+                        "SEIE": [9], "MEIE": [11], "LCOFIE": [13]}, {}),
+    "mtvec":    (0x305, 64, {"BASE": [63, 2], "MODE": [1, 0]}, {}),
     # mcountern
-    "mscratch": (0x340, 64, {}),
-    "mepc":     (0x341, 64, {}),
-    "mcause":   (0x342, 64, {"INT":[63], "CODE": [62, 0]}),
-    "mtval":    (0x343, 64, {}),
+    "mscratch": (0x340, 64, {}, {}),
+    "mepc":     (0x341, 64, {}, {}),
+    "mcause":   (0x342, 64, {"INT":[63], "CODE": [62, 0]}, {}),
+    "mtval":    (0x343, 64, {}, {}),
     "mip":      (0x344, 64, {"SSIP": [1], "MSIP": [3], "STIP": [5], "MTIP": [7],
-                        "SEIP": [9], "MEIP": [11], "LCOFIP": [13]}),
+                        "SEIP": [9], "MEIP": [11], "LCOFIP": [13]}, {}),
     
     # mtinst
     # mtval2
     
-    "pmpcfg0":  (0x3a0, 64, {}),
-    "pmpaddr0": (0x3B0, 64, {}),
+    "pmpcfg0":  (0x3a0, 64, {}, {}),
+    "pmpaddr0": (0x3B0, 64, {}, {}),
     
-    "mnstatus": (0x744, 64, {}),
+    "mnstatus": (0x744, 64, {}, {}),
     
-    "mcycle":   (0xb00, 64, {}), 
-    "minstret": (0xb02, 64, {}),
+    "mcycle":   (0xb00, 64, {}, {}), 
+    "minstret": (0xb02, 64, {}, {}),
     
     
-    # "mtime":    (0x000, 64, {}),
-    # "mtimecmp": (0x000, 64, {}),
+    # "mtime":    (0x000, 64, {}, {}),
+    # "mtimecmp": (0x000, 64, {}, {}),
     ##### DEBUG #######
-    "tcontrol": (0x7a5, 64, {"MPTE" : [7], "MPE":[3]}),
-    "tselect": (0x7a0, 64, {}),
-    "tdata1": (0x7a1, 64, {}),
-    "tdata2": (0x7a2, 64, {}),
-    "tdata3": (0x7a3, 64, {}),
+    "tcontrol": (0x7a5, 64, {"MPTE" : [7], "MPE":[3]}, {}),
+    "tselect": (0x7a0, 64, {}, {}),
+    "tdata1": (0x7a1, 64, {}, {}),
+    "tdata2": (0x7a2, 64, {}, {}),
+    "tdata3": (0x7a3, 64, {}, {}),
 }
 
 CSR_S = {
-    "satp":     (0x180, 64, {}), 
-    "stvec":    (0x105, 64, {}), 
-    "scountern":(0x106, 64, {}), 
+    "satp":     (0x180, 64, {}, {}), 
+    "stvec":    (0x105, 64, {}, {}), 
+    "scountern":(0x106, 64, {}, {}), 
 }
 
 CSR_U = {
-    "cycle":    (0xc00, 64, {}), 
+    "cycle":    (0xc00, 64, {}, {}), 
     
 }
  

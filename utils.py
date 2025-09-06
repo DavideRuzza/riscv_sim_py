@@ -3,6 +3,8 @@ from math import ceil, log2
 from enum import Enum
 from cpu_enums import *
 from typing import Dict, List, Tuple
+from elftools.elf.elffile import ELFFile
+
 
 import logging
 
@@ -56,6 +58,24 @@ COL = {
     # "bright_cyan": "\033[96m",
     # "bright_white": "\033[97m",
 }
+
+def get_symbol_info(elf_path, symbol_name):
+    with open(elf_path, "rb") as f:
+        elffile = ELFFile(f)
+
+        for section in elffile.iter_sections():
+            if section.header.sh_type not in ("SHT_SYMTAB", "SHT_DYNSYM"):
+                continue
+
+            for symbol in section.iter_symbols():
+                if symbol.name == symbol_name:
+                    return {
+                        "name": symbol.name,
+                        "address": symbol.entry.st_value,
+                        "size": symbol.entry.st_size,
+                        "section_index": symbol.entry.st_shndx
+                    }
+    return None
 
 class Reg:
     def __init__(self, nbits, data=0):
@@ -309,7 +329,7 @@ class CsrReg(Reg):
             
             if attr=='all':
                 log.debug(f"CSR write {self.name}"\
-                    f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
+                    f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
             else:
                 if blk.nbits>15:
                     log.debug(f"CSR block write {self.name}.{attr}"\
@@ -364,7 +384,7 @@ class CsrFile():
         csr_reg = self.csr_map[addr]
         csr_reg[:] = value&((1<<csr_reg.nbits)-1)
         log.debug(f"CSR write {csr_reg.name}"\
-                f" -> 0x{csr_reg[:]:0{int(csr_reg.nbits/4)}X}")
+                f" <- 0x{csr_reg[:]:0{int(csr_reg.nbits/4)}X}")
     
     def __getattr__(self, attr):
         if attr in self.name_to_addr:
