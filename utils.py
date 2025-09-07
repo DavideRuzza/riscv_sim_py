@@ -5,6 +5,10 @@ from cpu_enums import *
 from typing import Dict, List, Tuple
 from elftools.elf.elffile import ELFFile
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from main import RV64Hart
 
 import logging
 
@@ -285,13 +289,15 @@ class CsrReg(Reg):
             addr:int, 
             name:str, 
             xlen:int, 
-            sections:Dict[str, List[int]]
+            sections: Dict[str, List[int]],
+            blk_warls : Dict[str, List[int]]={}
         ):
         super().__init__(xlen, 0)
         
         # sections be like {"name": [12,0], "name1": [20:13], ... }
         # this will create n regslices referencing the csr bloks
         # self.xlen = xlen
+        
         self.addr = addr
         self.name = name
     
@@ -300,13 +306,20 @@ class CsrReg(Reg):
         self.priv = Mode(addr_reg[9:8])
         
         # self.reg = Reg(xlen)
-        sections['all'] = [xlen-1, 0]
+        self._blk_bit_map = sections.copy()
+        
+        sections['all'] = [xlen-1, 0] # add the "all" section 
+        
         self._blocks = {
                 blk : RegSlice(self, *bits) \
                     for blk, bits in sections.items()
             }
-        self.end_attr = True
-
+        
+        self.blk_warls = blk_warls # possible values for every WARL block
+        
+        self.blk_mask = self.gen_blk_mask()
+        self.blk_mask_n = self.gen_blk_mask(neg=True) #(~self.blk_mask) & self.mask
+        
     def __getattr__(self, attr):
         if attr in self._blocks:
             blk = self._blocks[attr]
@@ -317,29 +330,89 @@ class CsrReg(Reg):
                 log.debug(f"CSR block read {self.name}.{attr}"\
                     f" -> 0b{blk.val:0{blk.nbits}b}")
             return blk.val
-        raise AttributeError(f"{attr} not found")
-
+        raise AttributeError(f"{attr} not found")           
+             
     def __setattr__(self, attr, value):
         # If _blocks not yet created → just set attributes normally
         if attr == "_blocks" or "_blocks" not in self.__dict__:
             super().__setattr__(attr, value)
         elif attr in self._blocks:
             blk = self._blocks[attr]
-            blk.val = value
+            written = False
             
             if attr=='all':
+                # first write the csr parts that are not warl
+                masked_value = (value&self.blk_mask_n) | (blk.val&self.blk_mask)
+                blk.val = masked_value
+                
+                # then write all the blocks separately
+                for name, bits in self._blk_bit_map.items():
+                    # sub_blk = self._blocks[attr]
+                    
+                    blk_mask = self.gen_blk_mask(name)
+                    blk_set_val = (value&blk_mask)>>bits[-1]
+                    if name in self.blk_warls:
+                        if blk_set_val in self.blk_warls[name]:
+                            self._blocks[name].val = blk_set_val
+                    else:
+                        self._blocks[name].val = blk_set_val   
+                                         
                 log.debug(f"CSR write {self.name}"\
                     f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
             else:
-                if blk.nbits>15:
-                    log.debug(f"CSR block write {self.name}.{attr}"\
-                        f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
+                
+                if attr in self.blk_warls:
+                    if value in self.blk_warls[attr]:
+                        blk.val = value
+                        written=True
                 else:
-                    log.debug(f"CSR block write {self.name}.{attr}"\
-                        f" <- 0b{blk.val:0{blk.nbits}b}")
+                    blk.val = value
+                    written=True
+                
+                if written:
+                    if blk.nbits>15:
+                        log.debug(f"CSR block write {self.name}.{attr}"\
+                            f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
+                    else:
+                        log.debug(f"CSR block write {self.name}.{attr}"\
+                            f" <- 0b{blk.val:0{blk.nbits}b}")
         else:
             super().__setattr__(attr, value)  # allow normal attributes
 
+    def add_warl_to_blk(self, blk_name:str, warl_value:int):
+        
+        if blk_name not in self.blk_warls:
+            self.blk_warls[blk_name] = [warl_value]
+        else:
+            self.blk_warls[blk_name].append(warl_value)
+    
+    def update_warl_blk(self, blk_name:str, warl_list:List[int]):
+        
+        self.blk_warls[blk_name] = warl_list
+
+    
+    def gen_blk_mask(self, name=None, neg=False):
+        # generate mask of 1 where there is a csr block
+        mask = 0
+        
+        if name: assert name in self._blocks, f"{name} blok don't exist"
+        for n, bits in self._blk_bit_map.items():
+            if name!=None and n!=name and name!='all':
+                continue
+            
+            if len(bits)>1:
+                bit_span = bits[0]-bits[1]+1
+            else:
+                bit_span = 1
+            blk_mask = (1<<bit_span)-1
+            mask |= (blk_mask<<bits[-1])
+        
+          
+        
+        if neg: mask = (~mask) & self.mask
+    
+        return mask & self.mask
+    
 #########################
 
 class CsrFile():
@@ -350,19 +423,20 @@ class CsrFile():
         self.ext_list = ext_list 
         self.csr_map : Dict[int, CsrReg] = {}
         self.name_to_addr : Dict[str, int] = {}
-            
-        for ext in self.ext_list:
-            if   ext==Ext.M: self.add_csr_dict(CSR_M)
-            elif ext==Ext.S: self.add_csr_dict(CSR_S)
-            elif ext==Ext.U: self.add_csr_dict(CSR_U)
-            else:
-                raise AssertionError(f"unknown extension {ext.name}")
+        
+        self.add_csr_dict(CSR_M)
+        # for ext in self.ext_list:
+        #     if   ext==Ext.M: self.add_csr_dict(CSR_M)
+        #     elif ext==Ext.S: self.add_csr_dict(CSR_S)
+        #     elif ext==Ext.U: self.add_csr_dict(CSR_U)
+        #     else:
+        #         raise AssertionError(f"unknown extension {ext.name}")
         
     def add_csr_dict(self, 
             csr_dict : Dict[int, Tuple[str, int, Dict[str, List[int]]]]):
         
         for name, value in csr_dict.items():
-            addr, xlen, block_map = value
+            addr, xlen, block_map, _ = value
             self.csr_map[addr] = CsrReg(addr, name, xlen, block_map)
             self.name_to_addr[name] = addr
     
@@ -372,7 +446,10 @@ class CsrFile():
         addr = key
         if type(key) == str:
             addr = self.name_to_addr[key]
-        csr_reg = self.csr_map[addr]
+        try:
+            csr_reg = self.csr_map[addr]
+        except:
+            raise KeyError(f"not csr found in 0x{addr:03X}")
 
         return csr_reg
 
@@ -408,7 +485,7 @@ class CsrFile():
             
             out.append(f"* {y}0x{addr:03X} {g}{ul}{csr.name}{rst} "\
                 f"{gr}{bold}{'-'*(max_len-len(csr.name))}{gr}" \
-                f"{'rw' if csr.rw==3 else f"r-"}-{csr.priv.name}- "\
+                f"{'rw' if csr.rw!=3 else f"r-"}-{csr.priv.name}- "\
                 f"{rst}0x{csr[:]:0{int(csr.nbits/4)}X}"
                 )
             
