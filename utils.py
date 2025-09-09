@@ -290,7 +290,8 @@ class CsrReg(Reg):
             name:str, 
             xlen:int, 
             sections: Dict[str, List[int]],
-            blk_warls : Dict[str, List[int]]={}
+            blk_warl : Dict[str, List[int]] = {}, 
+            blk_wpri : Dict[str, List[int]] = {},
         ):
         super().__init__(xlen, 0)
         
@@ -307,6 +308,7 @@ class CsrReg(Reg):
         
         # self.reg = Reg(xlen)
         self._blk_bit_map = sections.copy()
+        self._blk_bit_map.update(blk_wpri)
         
         sections['all'] = [xlen-1, 0] # add the "all" section 
         
@@ -315,7 +317,10 @@ class CsrReg(Reg):
                     for blk, bits in sections.items()
             }
         
-        self.blk_warls = blk_warls # possible values for every WARL block
+        self._blocks.update({blk: None for blk in blk_wpri})
+        
+        self.blk_warl = blk_warl # possible values for every WARL block
+        self.blk_wpri = blk_wpri # unaccessible blocks defined with WPRI
         
         self.blk_mask = self.gen_blk_mask()
         self.blk_mask_n = self.gen_blk_mask(neg=True) #(~self.blk_mask) & self.mask
@@ -348,11 +353,12 @@ class CsrReg(Reg):
                 # then write all the blocks separately
                 for name, bits in self._blk_bit_map.items():
                     # sub_blk = self._blocks[attr]
-                    
+                    if name in self.blk_wpri:
+                        continue
                     blk_mask = self.gen_blk_mask(name)
                     blk_set_val = (value&blk_mask)>>bits[-1]
-                    if name in self.blk_warls:
-                        if blk_set_val in self.blk_warls[name]:
+                    if name in self.blk_warl:
+                        if blk_set_val in self.blk_warl[name]:
                             self._blocks[name].val = blk_set_val
                     else:
                         self._blocks[name].val = blk_set_val   
@@ -361,8 +367,8 @@ class CsrReg(Reg):
                     f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
             else:
                 
-                if attr in self.blk_warls:
-                    if value in self.blk_warls[attr]:
+                if attr in self.blk_warl:
+                    if value in self.blk_warl[attr]:
                         blk.val = value
                         written=True
                 else:
@@ -381,21 +387,21 @@ class CsrReg(Reg):
 
     def add_warl_to_blk(self, blk_name:str, warl_value:int):
         
-        if blk_name not in self.blk_warls:
-            self.blk_warls[blk_name] = [warl_value]
+        if blk_name not in self.blk_warl:
+            self.blk_warl[blk_name] = [warl_value]
         else:
-            self.blk_warls[blk_name].append(warl_value)
+            self.blk_warl[blk_name].append(warl_value)
     
     def update_warl_blk(self, blk_name:str, warl_list:List[int]):
         
-        self.blk_warls[blk_name] = warl_list
+        self.blk_warl[blk_name] = warl_list
 
     
     def gen_blk_mask(self, name=None, neg=False):
         # generate mask of 1 where there is a csr block
         mask = 0
         
-        if name: assert name in self._blocks, f"{name} blok don't exist"
+        if name: assert name in self._blocks, f"{name} block don't exist"
         for n, bits in self._blk_bit_map.items():
             if name!=None and n!=name and name!='all':
                 continue
@@ -407,11 +413,28 @@ class CsrReg(Reg):
             blk_mask = (1<<bit_span)-1
             mask |= (blk_mask<<bits[-1])
         
-          
-        
         if neg: mask = (~mask) & self.mask
     
         return mask & self.mask
+
+    # def gen_wpri_mask(self, neg=False):
+    #     # generate mask of 1 where there is a csr block
+    #     mask = 0
+        
+    #     for n, bits in self._blk_bit_map.items():
+    #         if name!=None and n!=name and name!='all':
+    #             continue
+            
+    #         if len(bits)>1:
+    #             bit_span = bits[0]-bits[1]+1
+    #         else:
+    #             bit_span = 1
+    #         blk_mask = (1<<bit_span)-1
+    #         mask |= (blk_mask<<bits[-1])
+        
+    #     if neg: mask = (~mask) & self.mask
+    
+    #     return mask & self.mask
     
 #########################
 
@@ -423,6 +446,7 @@ class CsrFile():
         self.ext_list = ext_list 
         self.csr_map : Dict[int, CsrReg] = {}
         self.name_to_addr : Dict[str, int] = {}
+        self.addr_to_name : Dict[int, str] = {}
         
         self.add_csr_dict(CSR_M)
         # for ext in self.ext_list:
@@ -436,9 +460,10 @@ class CsrFile():
             csr_dict : Dict[int, Tuple[str, int, Dict[str, List[int]]]]):
         
         for name, value in csr_dict.items():
-            addr, xlen, block_map, _ = value
-            self.csr_map[addr] = CsrReg(addr, name, xlen, block_map)
+            addr, xlen, block_map, wpri = value
+            self.csr_map[addr] = CsrReg(addr, name, xlen, block_map, blk_wpri=wpri)
             self.name_to_addr[name] = addr
+            self.addr_to_name[addr] = name
     
     
     def __getitem__(self, key):

@@ -16,12 +16,13 @@ def shift_unit(op, shamt, f3:OP_F3, f7:int, op32:bool=False):
     xlen = 32 if op32 else 64
     shamt = shamt&0b11111 if op32 else shamt&0b111111
     mask = (1<<xlen)-1
+    
     if f3 == OP_F3.SLL:
         # print(hex(op), hex(shamt))
         return (op&mask)<<shamt
     elif f3 == OP_F3.SRX:
-        
         if f7: # SRA
+            # print("SRA")
             # print(f3, op32, hex(op&mask), shamt)
             return sign_extend((op&mask)>>shamt, xlen-shamt)&mask
         else:
@@ -112,11 +113,17 @@ class RV64Hart():
         
         self.exception_list : List[ExceptionCode] = []
         self.to_host_addr = to_host_addr
-         
-        # setup csr registers
+        
+        # ------------- update variable value
+        self.new_pc = 0
+        self.write_back = False
+        self.write_csr = False
+        self.inst_ret = True
+        
+        # ------------- SETUP CSR
         self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
         
-        self.csr.misa.MXLEN = 2 # for 64bit
+        self.csr.misa.MXLEN = 0b10 # for 64bit
         self.csr.mhartid = self.hartid
         self.csr.mstatus.MPP = self.mode.value # set M mode state
         
@@ -130,6 +137,9 @@ class RV64Hart():
             self.csr.mstatus.UXL = 2 # for 64bit u-mode
             self.csr.mstatus.add_warl_to_blk("UXL", 2)
             self.csr.mstatus.add_warl_to_blk('MPP', Mode.U.value)
+            
+        self.csr.mtvec.update_warl_blk("MODE", [0, 1]) # normal mode or vectored
+        
 
         self.terminate = False # used to stop the process whethever bad happends
 
@@ -138,6 +148,7 @@ class RV64Hart():
 
     def raiseException(self, e: ExceptionCode):
         self.exception_list.append(e)
+        self.inst_ret = False
         
     def handleException(self):
         if len(self.exception_list)>0:
@@ -197,12 +208,14 @@ class RV64Hart():
         self.write_back = False
         self.write_csr = False
         
+        self.inst_ret = True
+        
         # ---------------------------- DECODE -------------------------------- #
         
         
         op = Ops(ins.opcode)
         if not self.handleException(): return False
-        log.info(op)
+        log.info(f"{self.pc:08x} {op.name}")
                 
         r1 = self.regfile[ins.I_rs1]
         r2 = self.regfile[ins.I_rs2]
@@ -236,10 +249,18 @@ class RV64Hart():
             new_rd = sign_extend(res32 & self.mask32, 32)
         elif op==Ops.OP_IMM:
             f3 = OP_F3(ins.I_f3)
-            new_rd = alu(r1, i_imm, f3, ins.I_f7 if f3!=OP_F3.ADD_SUB else 0)
+            cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
+            f7 = ins.I_f7 if cond else 0
+            if f3==OP_F3.SRX:# for SRAI and SRLI f7 is actually only the top 6 bits
+                f7 >>= 1
+            new_rd = alu(r1, i_imm, f3, f7)
         elif op==Ops.OP_IMM_32:
             f3 = OP_F3(ins.I_f3)
-            res32 = alu(r1, i_imm, f3, ins.I_f7 if f3!=OP_F3.ADD_SUB else 0, True) 
+            cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
+            f7 = ins.I_f7 if cond else 0
+            if f3==OP_F3.SRX: 
+                f7 >>= 1
+            res32 = alu(r1, i_imm, f3, f7, True) 
             new_rd = sign_extend(res32 & self.mask32, 32)
         elif op==Ops.BRANCH:
             # print(hex(r1), hex(r2))
@@ -330,29 +351,33 @@ class RV64Hart():
         
         self.handleException()
         
-        
         if self.write_csr:
             if self.csr[csr_key].rw != 0b11: # is read-only
                 self.csr[csr_key].all = new_csr
+                
+                if self.csr.addr_to_name[csr_key] == "minstret":
+                    self.inst_ret = False
             else:
                 self.write_back = False
                 self.raiseException(ExceptionCode.IllegalInstruction)
         
         self.handleException()
-        # breakpoint
 
         if self.write_back:
             log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
             self.regfile[ins.I_rd] = new_rd
             
-        if self.pc==0x8000_01f4:
-            print(f"self.new_pc: 0x{self.new_pc & self.mask64:8x}")
-            print(hex(self.csr['mtvec'][1:0]))
-            # print(hex(self.csr['mstatus'].all))
-            return False
+        # if self.pc==0x8000_01a4:
+        #     print(f"self.new_pc: 0x{self.new_pc & self.mask64:8x}")
+        #     print(hex(self.csr['mtvec'][1:0]))
+        #     # print(hex(self.csr['mstatus'].all))
+        #     return False
 
         self.pc = self.new_pc & self.mask64
         
+        if self.inst_ret:
+            self.csr.minstret[:] = self.csr.minstret[:] + 1  # = self.csr.minstret.all+1
+            
         return True
         
 
@@ -363,39 +388,39 @@ setup_logging(logging.DEBUG)
 log = logging.getLogger(__name__)
 input_path = Path("tests/rv64/bin/p")
 
-tests = sorted(list(input_path.glob("rv64mi*")))
+tests = sorted(list(input_path.glob("rv64ui*")))
 length = [len(str(t.stem)) for t in tests]
 # print(*tests, sep="\n")
 
-tests = [Path("tests/rv64/bin/p/rv64mi-p-illegal.bin")]
+tests = [Path("tests/rv64/bin/p/rv64si-p-scall.bin")]
 
 
 # print(tests[0])
-for test in tests:
-    # symtab = elf.get_section_by_name('.symtab')
-    print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
-    ram = MemoryDevice.from_binary_file(test, "RAM")
-    sys_bus = SystemInterface()
-    sys_bus.register_device(ram, 0x8000_0000)
-    to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
-    h0 = RV64Hart(0, sys_bus, [], to_host_addr=to_host_addr)
-    # break
-    while(h0.step()):
-        pass
+# for test in tests:
+#     # symtab = elf.get_section_by_name('.symtab')
+#     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
+#     ram = MemoryDevice.from_binary_file(test, "RAM")
+#     sys_bus = SystemInterface()
+#     sys_bus.register_device(ram, 0x8000_0000)
+#     to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
+#     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr=to_host_addr)
+#     # break
+#     while(h0.step()):
+#         pass
     
-    syscall_code = h0.regfile[17]
-    syscall_data = h0.regfile[10] 
-    if syscall_code==93: # exit code
-        if syscall_data == 0:
-            print(" ✅ Test PASSED")
-        else:
-            print(f" ❌ Test FAILED: {syscall_data>>1}")
-    else:
-        print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
+#     syscall_code = h0.regfile[17]
+#     syscall_data = h0.regfile[10] 
+#     if syscall_code==93: # exit code
+#         if syscall_data == 0:
+#             print(" ✅ Test PASSED")
+#         else:
+#             print(f" ❌ Test FAILED: {syscall_data>>1}")
+#     else:
+#         print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
             
-    # print(h0.csr)
+#     # print(h0.csr.minstret)
 
-    del h0
+#     del h0
 
 
 # csr = CsrFile([Ext.M])
@@ -403,8 +428,10 @@ for test in tests:
 # csr.mstatus.MPP = 3
 # print(csr.mstatus)
 
-# csr.mstatus.all = 0x1000
-# print(csr.mstatus)
+# csr.mstatus.all = 0xffff_ffff_ffff_ffff
+# print(bin(csr.mstatus.all))
+# for n in csr.mstatus._blocks:
+#     print(n)
 
 
 
