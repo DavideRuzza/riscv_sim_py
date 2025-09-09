@@ -460,7 +460,7 @@ class CsrFile():
             csr_dict : Dict[int, Tuple[str, int, Dict[str, List[int]]]]):
         
         for name, value in csr_dict.items():
-            addr, xlen, block_map, wpri = value
+            addr, xlen, block_map, wpri, shadow = value
             self.csr_map[addr] = CsrReg(addr, name, xlen, block_map, blk_wpri=wpri)
             self.name_to_addr[name] = addr
             self.addr_to_name[addr] = name

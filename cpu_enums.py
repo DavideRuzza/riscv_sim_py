@@ -141,11 +141,11 @@ class ExceptionCode(Enum):
     HardwareError = 19
 
 CSR_M = {    
-    "mvendorid":(0xf11, 32, {"bank": [31, 7],"Offset": [6, 0]}, {}),
-    "marchid":  (0xf12, 64, {"Architecture_ID": [63, 0]}, {}),
-    "mimpid":   (0xf13, 64, {"Implementation": [63, 0]}, {}),
-    "mhartid":  (0xf14, 64, {"Hart_ID": [63, 0]}, {}),
-    "mconfigptr": (0xf15, 64, {}, {}),
+    "mvendorid":(0xf11, 32, {"bank": [31, 7],"Offset": [6, 0]}, {}, None),
+    "marchid":  (0xf12, 64, {"Architecture_ID": [63, 0]}, {}, None),
+    "mimpid":   (0xf13, 64, {"Implementation": [63, 0]}, {}, None),
+    "mhartid":  (0xf14, 64, {"Hart_ID": [63, 0]}, {}, None),
+    "mconfigptr": (0xf15, 64, {}, {}, None),
     "mstatus":  (0x300, 64, {
             "SIE": [1], "MIE": [3], "UPIE": [4], "SPIE": [5], 
             "UBE" : [6], "MPIE": [7], "SPP": [8],"VS" : [10, 9], "MPP": [12, 11], 
@@ -156,42 +156,42 @@ CSR_M = {
             }, {
                 "WPRI_1": [0], "WPRI_2":[2], "WPRI_3": [31,25], 
                 "WPRI_4": [40], "WPRI_5": [62, 43]
-            }),
+            }, None),
     
-    "misa":     (0x301, 64, {"MXL": [63, 62], "MXLEN": [61, 60], "Extensions": [25, 0]}, {}),
-    "medeleg":  (0x302, 64, {}, {}),
-    "mideleg":  (0x303, 64, {}, {}),
+    "misa":     (0x301, 64, {"MXL": [63, 62], "MXLEN": [61, 60], "Extensions": [25, 0]}, {}, None),
+    "medeleg":  (0x302, 64, {}, {}, None),
+    "mideleg":  (0x303, 64, {}, {}, None),
     "mie":      (0x304, 64, {"SSIE": [1], "MSIE": [3], "STIE": [5], "MTIE": [7],
-                        "SEIE": [9], "MEIE": [11], "LCOFIE": [13]}, {}),
-    "mtvec":    (0x305, 64, {"BASE": [63, 2], "MODE": [1, 0]}, {}),
-    "mcountern":(0x306, 32, {}, {}),
-    "mscratch": (0x340, 64, {}, {}),
-    "mepc":     (0x341, 64, {}, {}),
-    "mcause":   (0x342, 64, {"INT":[63], "CODE": [62, 0]}, {}),
-    "mtval":    (0x343, 64, {}, {}),
+                        "SEIE": [9], "MEIE": [11], "LCOFIE": [13]}, {}, None),
+    "mtvec":    (0x305, 64, {"BASE": [63, 2], "MODE": [1, 0]}, {}, None),
+    "mcountern":(0x306, 32, {}, {}, None),
+    "mscratch": (0x340, 64, {}, {}, None),
+    "mepc":     (0x341, 64, {}, {}, None),
+    "mcause":   (0x342, 64, {"INT":[63], "CODE": [62, 0]}, {}, None),
+    "mtval":    (0x343, 64, {}, {}, None),
     "mip":      (0x344, 64, {"SSIP": [1], "MSIP": [3], "STIP": [5], "MTIP": [7],
-                        "SEIP": [9], "MEIP": [11], "LCOFIP": [13]}, {}),
+                        "SEIP": [9], "MEIP": [11], "LCOFIP": [13]}, {}, None),
     
     # mtinst
     # mtval2
     
-    "pmpcfg0":  (0x3a0, 64, {}, {}),
-    "pmpaddr0": (0x3B0, 64, {}, {}),
+    "pmpcfg0":  (0x3a0, 64, {}, {}, None),
+    "pmpaddr0": (0x3B0, 64, {}, {}, None),
     
-    "mnstatus": (0x744, 64, {}, {}),
+    "mnstatus": (0x744, 64, {}, {}, None),
     
-    "mcycle":   (0xb00, 64, {}, {}), 
-    "minstret": (0xb02, 64, {}, {}),
+    "mcycle":   (0xb00, 64, {}, {}, None), 
+    "minstret": (0xb02, 64, {}, {}, None),
     
     
-    # "mtime":    (0x000, 64, {}, {}),
-    # "mtimecmp": (0x000, 64, {}, {}),
+    # "mtime":    (0x000, 64, {}, {}, None),
+    # "mtimecmp": (0x000, 64, {}, {}, None),
     ##### DEBUG #######
-    "tcontrol": (0x7a5, 64, {"MPTE" : [7], "MPE":[3]}, {}),
-    "tselect": (0x7a0, 64, {}, {}),
-    "tdata1": (0x7a1, 64, {}, {}),
-    "tdata2": (0x7a2, 64, {}, {}),
-    "tdata3": (0x7a3, 64, {}, {}),
+    "tcontrol": (0x7a5, 64, {"MPTE" : [7], "MPE":[3]}, {}, None),
+    "tselect": (0x7a0, 64, {}, {}, None),
+    "tdata1": (0x7a1, 64, {}, {}, None),
+    "tdata2": (0x7a2, 64, {}, {}, None),
+    "tdata3": (0x7a3, 64, {}, {}, None),
 # }
 
 # CSR_S = {
@@ -202,15 +202,17 @@ CSR_M = {
                 "WPRI_1": [0], "WPRI_2": [4, 2], "WPRI_3": [7], "WPRI_4": [12, 11],
                 "WPRI_5": [17], "WPRI_6": [22, 20], "WPRI_7": [31, 25], 
                 "WPRI_8": [62, 34]
-            }),
+            }, "mstatus"),
     
-    "satp":     (0x180, 64, {}, {}), 
-    "stvec":    (0x105, 64, {}, {}), 
-    "scountern":(0x106, 64, {}, {}), 
+    
+    "satp":     (0x180, 64, {}, {}, None), 
+    "stvec":    (0x105, 64, {}, {}, None), 
+    "scountern":(0x106, 64, {}, {}, None), 
+    "sepc":     (0x141, 64, {}, {}, None),
 # }
 
 # CSR_U = {
-    "cycle":    (0xc00, 64, {}, {}), 
+    "cycle":    (0xc00, 64, {}, {}, None), 
     
 }
  

@@ -191,6 +191,22 @@ class RV64Hart():
         # print("IMPL", self.is_ext_impl(Ext.U))
         self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
         return self.csr.mepc.all
+    
+    def sret(self):
+        self.csr.mstatus.MIE = self.csr.mstatus.MPIE
+        self.csr.mstatus.MPIE = 1
+        
+        mpp = self.csr.mstatus.MPP
+        if (mpp == 0b00):
+            self.set_mode(Mode.U)
+        elif (mpp == 0b01):
+            self.set_mode(Mode.S)
+        elif (mpp == 0b11):
+            self.set_mode(Mode.M)
+        
+        # print("IMPL", self.is_ext_impl(Ext.U))
+        self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
+        return self.csr.mepc.all
      
     def step(self):
         
@@ -303,6 +319,7 @@ class RV64Hart():
                     elif (self.mode==Mode.U): self.raiseException(ExceptionCode.Ucall)
                 else:                    
                     log.error(f" {f12} Not Implemented")
+                    return False
                     self.raiseException(ExceptionCode.IllegalInstruction)
             else:
                 f3 = CSR_F3(ins.I_f3)
@@ -396,31 +413,31 @@ tests = [Path("tests/rv64/bin/p/rv64si-p-scall.bin")]
 
 
 # print(tests[0])
-# for test in tests:
-#     # symtab = elf.get_section_by_name('.symtab')
-#     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
-#     ram = MemoryDevice.from_binary_file(test, "RAM")
-#     sys_bus = SystemInterface()
-#     sys_bus.register_device(ram, 0x8000_0000)
-#     to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
-#     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr=to_host_addr)
-#     # break
-#     while(h0.step()):
-#         pass
+for test in tests:
+    # symtab = elf.get_section_by_name('.symtab')
+    print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
+    ram = MemoryDevice.from_binary_file(test, "RAM")
+    sys_bus = SystemInterface()
+    sys_bus.register_device(ram, 0x8000_0000)
+    to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr=to_host_addr)
+    # break
+    while(h0.step()):
+        pass
     
-#     syscall_code = h0.regfile[17]
-#     syscall_data = h0.regfile[10] 
-#     if syscall_code==93: # exit code
-#         if syscall_data == 0:
-#             print(" ✅ Test PASSED")
-#         else:
-#             print(f" ❌ Test FAILED: {syscall_data>>1}")
-#     else:
-#         print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
+    syscall_code = h0.regfile[17]
+    syscall_data = h0.regfile[10] 
+    if syscall_code==93: # exit code
+        if syscall_data == 0:
+            print(" ✅ Test PASSED")
+        else:
+            print(f" ❌ Test FAILED: {syscall_data>>1}")
+    else:
+        print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
             
-#     # print(h0.csr.minstret)
+    # print(h0.csr.minstret)
 
-#     del h0
+    del h0
 
 
 # csr = CsrFile([Ext.M])
