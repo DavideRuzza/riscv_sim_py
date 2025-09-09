@@ -158,7 +158,7 @@ CSR_M = {
                 "WPRI_4": [40], "WPRI_5": [62, 43]
             }, None),
     
-    "misa":     (0x301, 64, {"MXL": [63, 62], "MXLEN": [61, 60], "Extensions": [25, 0]}, {}, None),
+    "misa":     (0x301, 64, {"MXL": [63, 62], "MXLEN": [61, 26], "Extensions": [25, 0]}, {}, None),
     "medeleg":  (0x302, 64, {}, {}, None),
     "mideleg":  (0x303, 64, {}, {}, None),
     "mie":      (0x304, 64, {"SSIE": [1], "MSIE": [3], "STIE": [5], "MTIE": [7],

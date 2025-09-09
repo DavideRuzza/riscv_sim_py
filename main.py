@@ -123,7 +123,7 @@ class RV64Hart():
         # ------------- SETUP CSR
         self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
         
-        self.csr.misa.MXLEN = 0b10 # for 64bit
+        self.csr.misa.MXL = 0b10 # for 64bit
         self.csr.mhartid = self.hartid
         self.csr.mstatus.MPP = self.mode.value # set M mode state
         
@@ -412,32 +412,32 @@ length = [len(str(t.stem)) for t in tests]
 tests = [Path("tests/rv64/bin/p/rv64si-p-scall.bin")]
 
 
-# print(tests[0])
-for test in tests:
-    # symtab = elf.get_section_by_name('.symtab')
-    print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
-    ram = MemoryDevice.from_binary_file(test, "RAM")
-    sys_bus = SystemInterface()
-    sys_bus.register_device(ram, 0x8000_0000)
-    to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
-    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr=to_host_addr)
-    # break
-    while(h0.step()):
-        pass
+# # print(tests[0])
+# for test in tests:
+#     # symtab = elf.get_section_by_name('.symtab')
+#     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
+#     ram = MemoryDevice.from_binary_file(test, "RAM")
+#     sys_bus = SystemInterface()
+#     sys_bus.register_device(ram, 0x8000_0000)
+#     to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
+#     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr=to_host_addr)
+#     # break
+#     while(h0.step()):
+#         pass
     
-    syscall_code = h0.regfile[17]
-    syscall_data = h0.regfile[10] 
-    if syscall_code==93: # exit code
-        if syscall_data == 0:
-            print(" ✅ Test PASSED")
-        else:
-            print(f" ❌ Test FAILED: {syscall_data>>1}")
-    else:
-        print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
+#     syscall_code = h0.regfile[17]
+#     syscall_data = h0.regfile[10] 
+#     if syscall_code==93: # exit code
+#         if syscall_data == 0:
+#             print(" ✅ Test PASSED")
+#         else:
+#             print(f" ❌ Test FAILED: {syscall_data>>1}")
+#     else:
+#         print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
             
-    # print(h0.csr.minstret)
+#     # print(h0.csr.minstret)
 
-    del h0
+#     del h0
 
 
 # csr = CsrFile([Ext.M])
@@ -445,11 +445,10 @@ for test in tests:
 # csr.mstatus.MPP = 3
 # print(csr.mstatus)
 
-# csr.mstatus.all = 0xffff_ffff_ffff_ffff
+# csr.sstatus.all = 0xffff_ffff_ffff_ffff
 # print(bin(csr.mstatus.all))
-# for n in csr.mstatus._blocks:
-#     print(n)
-
+# print(bin(csr.sstatus.all))
+# print(bin(csr.mstatus.all))
 
 
 

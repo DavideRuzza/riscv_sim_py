@@ -283,7 +283,7 @@ class RegFile:
                 dump_str+="%3s: %08x " % (name, self.reg_file[i])
         return dump_str
 
-class CsrReg(Reg):
+class CsrReg():
     
     def __init__(self, 
             addr:int, 
@@ -292,9 +292,16 @@ class CsrReg(Reg):
             sections: Dict[str, List[int]],
             blk_warl : Dict[str, List[int]] = {}, 
             blk_wpri : Dict[str, List[int]] = {},
+            reg :Reg = None,
         ):
-        super().__init__(xlen, 0)
         
+        if reg==None:
+            self.reg = Reg(xlen, 0)
+        else:
+            self.reg = reg
+            
+        self.nbits = self.reg.nbits
+        self.mask = self.reg.mask
         # sections be like {"name": [12,0], "name1": [20:13], ... }
         # this will create n regslices referencing the csr bloks
         # self.xlen = xlen
@@ -313,7 +320,7 @@ class CsrReg(Reg):
         sections['all'] = [xlen-1, 0] # add the "all" section 
         
         self._blocks = {
-                blk : RegSlice(self, *bits) \
+                blk : RegSlice(self.reg, *bits) \
                     for blk, bits in sections.items()
             }
         
@@ -324,7 +331,15 @@ class CsrReg(Reg):
         
         self.blk_mask = self.gen_blk_mask()
         self.blk_mask_n = self.gen_blk_mask(neg=True) #(~self.blk_mask) & self.mask
+    
+        self.wpri_mask = self.gen_wpri_mask(True) # negative
         
+    def __getitem__(self, key):
+        return self.reg[key]
+    
+    def __setitem__(self, key, value):
+        self.reg[key] = value
+    
     def __getattr__(self, attr):
         if attr in self._blocks:
             blk = self._blocks[attr]
@@ -334,7 +349,7 @@ class CsrReg(Reg):
             else:
                 log.debug(f"CSR block read {self.name}.{attr}"\
                     f" -> 0b{blk.val:0{blk.nbits}b}")
-            return blk.val
+            return blk.val & self.wpri_mask
         raise AttributeError(f"{attr} not found")           
              
     def __setattr__(self, attr, value):
@@ -417,24 +432,22 @@ class CsrReg(Reg):
     
         return mask & self.mask
 
-    # def gen_wpri_mask(self, neg=False):
-    #     # generate mask of 1 where there is a csr block
-    #     mask = 0
+    def gen_wpri_mask(self, neg=False):
+        # generate mask of 1 where there is a csr WPRI block
+        mask = 0
         
-    #     for n, bits in self._blk_bit_map.items():
-    #         if name!=None and n!=name and name!='all':
-    #             continue
+        for n, bits in self.blk_wpri.items():
             
-    #         if len(bits)>1:
-    #             bit_span = bits[0]-bits[1]+1
-    #         else:
-    #             bit_span = 1
-    #         blk_mask = (1<<bit_span)-1
-    #         mask |= (blk_mask<<bits[-1])
+            if len(bits)>1:
+                bit_span = bits[0]-bits[1]+1
+            else:
+                bit_span = 1
+            blk_mask = (1<<bit_span)-1
+            mask |= (blk_mask<<bits[-1])
         
-    #     if neg: mask = (~mask) & self.mask
+        if neg: mask = (~mask) & self.mask
     
-    #     return mask & self.mask
+        return mask & self.mask
     
 #########################
 
@@ -461,7 +474,18 @@ class CsrFile():
         
         for name, value in csr_dict.items():
             addr, xlen, block_map, wpri, shadow = value
-            self.csr_map[addr] = CsrReg(addr, name, xlen, block_map, blk_wpri=wpri)
+            
+            if shadow:
+                self.csr_map[addr] = CsrReg(
+                    addr, name, 
+                    xlen, block_map,
+                    blk_wpri=wpri, reg=self[shadow].reg)
+            else:
+                self.csr_map[addr] = CsrReg(
+                    addr, name, 
+                    xlen, block_map,
+                    blk_wpri=wpri)
+                
             self.name_to_addr[name] = addr
             self.addr_to_name[addr] = name
     
@@ -474,7 +498,7 @@ class CsrFile():
         try:
             csr_reg = self.csr_map[addr]
         except:
-            raise KeyError(f"not csr found in 0x{addr:03X}")
+            raise KeyError(f"no csr found in 0x{addr:03X}")
 
         return csr_reg
 
