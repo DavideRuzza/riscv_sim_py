@@ -114,7 +114,6 @@ class Priviledge(Enum):
     H = 0b10
     M = 0b11
 
-
 class Mode(Enum):
     U = 0
     S = 1

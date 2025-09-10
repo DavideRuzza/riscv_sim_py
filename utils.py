@@ -343,13 +343,17 @@ class CsrReg():
     def __getattr__(self, attr):
         if attr in self._blocks:
             blk = self._blocks[attr]
+            if attr=='all':
+                lsb=0
+            else:
+                lsb = self._blk_bit_map[attr][-1]
             if blk.nbits>15:
                 log.debug(f"CSR block read {self.name}.{attr}"\
                     f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
             else:
                 log.debug(f"CSR block read {self.name}.{attr}"\
                     f" -> 0b{blk.val:0{blk.nbits}b}")
-            return blk.val & self.wpri_mask
+            return blk.val #& ((self.wpri_mask&self.gen_blk_mask(attr))>>lsb)
         raise AttributeError(f"{attr} not found")           
              
     def __setattr__(self, attr, value):

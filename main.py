@@ -128,6 +128,7 @@ class RV64Hart():
         self.csr.mstatus.MPP = self.mode.value # set M mode state
         
         self.csr.mstatus.add_warl_to_blk('MPP', Mode.M.value)
+        
         if self.is_ext_impl(Ext.S) : 
             self.csr.mstatus.SXL = 2 # for 64bit s-mode
             self.csr.mstatus.add_warl_to_blk("SXL", 2)
@@ -181,6 +182,7 @@ class RV64Hart():
         self.csr.mstatus.MPIE = 1
         
         mpp = self.csr.mstatus.MPP
+        
         if (mpp == 0b00):
             self.set_mode(Mode.U)
         elif (mpp == 0b01):
@@ -192,21 +194,22 @@ class RV64Hart():
         self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
         return self.csr.mepc.all
     
-    def sret(self):
-        self.csr.mstatus.MIE = self.csr.mstatus.MPIE
-        self.csr.mstatus.MPIE = 1
+    # def sret(self):
+    #     self.csr.mstatus.MIE = self.csr.mstatus.MPIE
+    #     self.csr.mstatus.MPIE = 1
         
-        mpp = self.csr.mstatus.MPP
-        if (mpp == 0b00):
-            self.set_mode(Mode.U)
-        elif (mpp == 0b01):
-            self.set_mode(Mode.S)
-        elif (mpp == 0b11):
-            self.set_mode(Mode.M)
+    #     mpp = self.csr.mstatus.MPP
+    #     print("mpp is ", mpp)
+    #     if (mpp == 0b00):
+    #         self.set_mode(Mode.U)
+    #     elif (mpp == 0b01):
+    #         self.set_mode(Mode.S)
+    #     elif (mpp == 0b11):
+    #         self.set_mode(Mode.M)
         
         # print("IMPL", self.is_ext_impl(Ext.U))
-        self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
-        return self.csr.mepc.all
+        # self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
+        # return self.csr.mepc.all
      
     def step(self):
         
@@ -311,7 +314,9 @@ class RV64Hart():
                 f12 = SYS_F12(ins.I_f12)
                 if f12==SYS_F12.MRET:
                     log.error("--MRET--")
+                    # print("mmmm")
                     self.new_pc = self.mret()
+                    # print(self.csr.mepc.all)
                 elif f12==SYS_F12.ECALL:
                     log.error("--ECALL--")
                     if (self.mode==Mode.M): self.raiseException(ExceptionCode.Mcall)
@@ -360,7 +365,9 @@ class RV64Hart():
                     else:
                         raise Exception(f'CSR OP {f3} not defined')
                 else:
-                    self.raiseException(ExceptionCode.IllegalInstruction)
+                    print("not enough permission")
+                    return False
+                    # self.raiseException(ExceptionCode.IllegalInstruction)
         else:
             # raise Exception(f"{op} not implemented")
             log.error("Not Implemented")
@@ -384,11 +391,11 @@ class RV64Hart():
             log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
             self.regfile[ins.I_rd] = new_rd
             
-        # if self.pc==0x8000_01a4:
-        #     print(f"self.new_pc: 0x{self.new_pc & self.mask64:8x}")
-        #     print(hex(self.csr['mtvec'][1:0]))
-        #     # print(hex(self.csr['mstatus'].all))
-        #     return False
+        if self.pc==0x8000_0198:
+            print(f"self.new_pc: 0x{(self.new_pc & self.mask64):8x}")
+            print(hex(self.csr['mtvec'][1:0]))
+            print(self.csr.mepc.all)
+            return False
 
         self.pc = self.new_pc & self.mask64
         
@@ -412,7 +419,7 @@ length = [len(str(t.stem)) for t in tests]
 tests = [Path("tests/rv64/bin/p/rv64si-p-scall.bin")]
 
 
-# # print(tests[0])
+# print(tests[0])
 # for test in tests:
 #     # symtab = elf.get_section_by_name('.symtab')
 #     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
@@ -440,11 +447,17 @@ tests = [Path("tests/rv64/bin/p/rv64si-p-scall.bin")]
 #     del h0
 
 
-# csr = CsrFile([Ext.M])
-# csr.mstatus.update_warl_blk("MPP", [1, 2, 3])
-# csr.mstatus.MPP = 3
-# print(csr.mstatus)
 
+csr = CsrFile([Ext.M])
+csr.mstatus.update_warl_blk("MPP", [1, 2, 3])
+csr.mepc.all=0x800001a8
+print(hex(csr.mepc.all))
+# csr.mstatus.MPP = 1
+# # print(csr.mstatus.blk_wpri)
+# # print(bin(csr.mstatus.gen_wpri_mask()))
+# # print(bin(csr.mstatus.gen_wpri_mask(True)))
+# # print(bin(csr.mstatus.gen_blk_mask('MPP')))
+# print(csr.mstatus.all)
 # csr.sstatus.all = 0xffff_ffff_ffff_ffff
 # print(bin(csr.mstatus.all))
 # print(bin(csr.sstatus.all))
