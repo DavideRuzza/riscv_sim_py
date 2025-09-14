@@ -131,6 +131,7 @@ class ExceptionCode(Enum):
     StoreAmoAccessFault = 7
     Ucall = 8
     Scall = 9
+    VScall = 10
     Mcall = 11
     InstructionPageFault = 12
     LoadPageFault = 13
@@ -138,6 +139,10 @@ class ExceptionCode(Enum):
     DoubleTrap = 16
     SoftwareSheck = 18
     HardwareError = 19
+    IntructionGuestPageFault = 20
+    LoadGuestPageFault = 21
+    VirtualIntruction = 22
+    StoreAmoGuestPageFault = 23
 
 CSR_M = {    
     "mvendorid":(0xf11, 32, {"bank": [31, 7],"Offset": [6, 0]}, {}, None),
@@ -158,12 +163,24 @@ CSR_M = {
             }, None),
     
     "misa":     (0x301, 64, {"MXL": [63, 62], "MXLEN": [61, 26], "Extensions": [25, 0]}, {}, None),
-    "medeleg":  (0x302, 64, {}, {}, None),
+    "medeleg":  (0x302, 64, {
+            "IAM" : [0], "IAF" : [1], "II" : [2], "B" : [2], "LAM" : [4], 
+            "LAF" : [5], "SAM" : [6], "EU" : [8], "ES" : [9], "EVS" : [10], 
+            "EM" : [11], "IPF" : [12], "LPF" : [13], "SPF" : [15], "IGPF" : [20],
+            "LGPF" : [21], "VI" : [22], "SGPF" : [23], 
+            }, {
+            "WPRI_0" : [14], "WPRI_1" : [19, 16], "WPRI_2" : [63, 24],
+            }, None),
+    
     "mideleg":  (0x303, 64, {}, {}, None),
     "mie":      (0x304, 64, {"SSIE": [1], "MSIE": [3], "STIE": [5], "MTIE": [7],
                         "SEIE": [9], "MEIE": [11], "LCOFIE": [13]}, {}, None),
     "mtvec":    (0x305, 64, {"BASE": [63, 2], "MODE": [1, 0]}, {}, None),
     "mcountern":(0x306, 32, {}, {}, None),
+    "mcountinhibit":(0x320, 32, {
+        **{f"HPM{i}": [i] for i in range(3, 32)}, "IR":[2], "CY":[0]},
+                     {"WPRI_0":[1]}, None),
+    
     "mscratch": (0x340, 64, {}, {}, None),
     "mepc":     (0x341, 64, {}, {}, None),
     "mcause":   (0x342, 64, {"INT":[63], "CODE": [62, 0]}, {}, None),
@@ -205,13 +222,17 @@ CSR_M = {
     
     
     "satp":     (0x180, 64, {}, {}, None), 
-    "stvec":    (0x105, 64, {}, {}, None), 
+    "stvec":    (0x105, 64, {"BASE": [63, 2], "MODE": [1, 0]}, {}, None), 
     "scountern":(0x106, 64, {}, {}, None), 
+    "sscratch": (0x140, 64, {}, {}, None),
     "sepc":     (0x141, 64, {}, {}, None),
+    "scause":   (0x142, 64, {"INT":[63], "CODE": [62, 0]}, {}, None),
+    
 # }
 
 # CSR_U = {
-    "cycle":    (0xc00, 64, {}, {}, None), 
+    "cycle":    (0xc00, 64, {}, {}, "mcycle"), 
+    "instret":    (0xc02, 64, {}, {}, "minstret"), 
     
 }
  

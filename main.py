@@ -119,6 +119,7 @@ class RV64Hart():
         self.write_back = False
         self.write_csr = False
         self.inst_ret = True
+        self.cnt_cycle = True
         
         # ------------- SETUP CSR
         self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
@@ -154,24 +155,43 @@ class RV64Hart():
     def handleException(self):
         if len(self.exception_list)>0:
             e = self.exception_list.pop()
-            log.error(f"--- Exception : {e.name} ---")
-            self.csr.mepc.all = self.pc
-            self.new_pc = self.csr.mtvec.BASE<<2
             
-            # check for vectored interrupt
-            if self.csr.mtvec.MODE==1:
-                log.error("--- Vectored ---")
-                self.new_pc += 4*e.value
+            medeleg = self.csr.medeleg.all
             
-            self.csr.mcause.INT = 0b0 # is an exception, not an interrupt
-            self.csr.mcause.CODE = e.value
-            self.csr.mstatus.MPP = self.mode.value
-            
-            # TODO: for now is ok but later check medeleg for delegation. 
-            self.mode = Mode.M
-        
-            # log.error(f"addr: 0x{self.csr.mepc.all:08X}, {e.name}")
-            # return False # for now whethever it terminate
+            # check if the exception is delegated to S mode
+            deleg_cond = (medeleg>>e.value)&0b1
+            # log.error(f"")
+            log.error(f"--- Exception : {e.name}, Handle: {"S" if deleg_cond else "M"} ---")
+
+            if deleg_cond:
+                self.csr.sepc.all = self.pc
+                self.new_pc = self.csr.stvec.BASE<<2
+                
+                # check for vectored exception
+                if self.csr.stvec.MODE==1:
+                    log.error("--- Vectored ---")
+                    self.new_pc += 4*e.value
+                
+                self.csr.scause.INT = 0b0 # is an exception, not an interrupt
+                self.csr.scause.CODE = e.value
+                self.csr.sstatus.SPP = self.mode.value
+                
+                self.mode = Mode.S
+            else:
+                self.csr.mepc.all = self.pc
+                self.new_pc = self.csr.mtvec.BASE<<2
+                
+                # check for vectored exceptions
+                if self.csr.mtvec.MODE==1:
+                    log.error("--- Vectored ---")
+                    self.new_pc += 4*e.value
+                
+                self.csr.mcause.INT = 0b0 # is an exception, not an interrupt
+                self.csr.mcause.CODE = e.value
+                self.csr.mstatus.MPP = self.mode.value
+                
+                self.mode = Mode.M
+
         return True
 
     def set_mode(self, mode: Mode):
@@ -194,22 +214,20 @@ class RV64Hart():
         self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
         return self.csr.mepc.all
     
-    # def sret(self):
-    #     self.csr.mstatus.MIE = self.csr.mstatus.MPIE
-    #     self.csr.mstatus.MPIE = 1
+    def sret(self):
+        self.csr.sstatus.SIE = self.csr.sstatus.SPIE
+        self.csr.sstatus.SPIE = 1
         
-    #     mpp = self.csr.mstatus.MPP
-    #     print("mpp is ", mpp)
-    #     if (mpp == 0b00):
-    #         self.set_mode(Mode.U)
-    #     elif (mpp == 0b01):
-    #         self.set_mode(Mode.S)
-    #     elif (mpp == 0b11):
-    #         self.set_mode(Mode.M)
+        spp = self.csr.sstatus.SPP
+        
+        if spp==1:
+            self.set_mode(Mode.S)
+        else:
+            self.set_mode(Mode.U)
         
         # print("IMPL", self.is_ext_impl(Ext.U))
-        # self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
-        # return self.csr.mepc.all
+        self.csr.mstatus.SPP = 0b0
+        return self.csr.sepc.all
      
     def step(self):
         
@@ -228,6 +246,8 @@ class RV64Hart():
         self.write_csr = False
         
         self.inst_ret = True
+        self.cnt_cycle = True
+        
         
         # ---------------------------- DECODE -------------------------------- #
         
@@ -304,19 +324,26 @@ class RV64Hart():
             addr = ( r1 + i_imm) & self.mask64
             # LBU, LHU, LWU are just the same but with the bit 0b100
             size_byte = 1<<(ins.I_f3&0b11) 
-            new_rd = self.sys_bus.read(addr, size_byte)
-            f3_l = LD_F3(ins.I_f3)
-            if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
-                new_rd = sign_extend(new_rd, size_byte*8)
+            
+            if addr%size_byte!=0:
+                self.raiseException(ExceptionCode.LoadAddressMisaligned)
+                self.write_back = False
+            else:
+                new_rd = self.sys_bus.read(addr, size_byte)
+                f3_l = LD_F3(ins.I_f3)
+                # print(size_byte)
+                if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
+                    new_rd = sign_extend(new_rd, size_byte*8)
                 
         elif op==Ops.SYSTEM:
             if ins.I_f3 == 0:
                 f12 = SYS_F12(ins.I_f12)
                 if f12==SYS_F12.MRET:
                     log.error("--MRET--")
-                    # print("mmmm")
                     self.new_pc = self.mret()
-                    # print(self.csr.mepc.all)
+                elif f12==SYS_F12.SRET:
+                    log.error("--SRET--")
+                    self.new_pc = self.sret()
                 elif f12==SYS_F12.ECALL:
                     log.error("--ECALL--")
                     if (self.mode==Mode.M): self.raiseException(ExceptionCode.Mcall)
@@ -325,7 +352,6 @@ class RV64Hart():
                 else:                    
                     log.error(f" {f12} Not Implemented")
                     return False
-                    self.raiseException(ExceptionCode.IllegalInstruction)
             else:
                 f3 = CSR_F3(ins.I_f3)
                 csr_key = ins.I_f12
@@ -367,7 +393,6 @@ class RV64Hart():
                 else:
                     print("not enough permission")
                     return False
-                    # self.raiseException(ExceptionCode.IllegalInstruction)
         else:
             # raise Exception(f"{op} not implemented")
             log.error("Not Implemented")
@@ -391,16 +416,21 @@ class RV64Hart():
             log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
             self.regfile[ins.I_rd] = new_rd
             
-        if self.pc==0x8000_0198:
-            print(f"self.new_pc: 0x{(self.new_pc & self.mask64):8x}")
-            print(hex(self.csr['mtvec'][1:0]))
-            print(self.csr.mepc.all)
-            return False
+        # if self.pc==0x8000_0208:
+        #     log.error("-- Breakpoint --")
+        #     print(f"self.new_pc: 0x{(self.new_pc & self.mask64):8x}")
+        #     print(hex(self.csr['mtvec'][1:0]))
+        #     return False
 
         self.pc = self.new_pc & self.mask64
         
         if self.inst_ret:
-            self.csr.minstret[:] = self.csr.minstret[:] + 1  # = self.csr.minstret.all+1
+            if self.csr['mcountinhibit']._blocks['IR'].val == 0:
+                self.csr.minstret[:] = self.csr.minstret[:] + 1  # = self.csr.minstret.all+1
+            
+        if self.cnt_cycle:
+            if self.csr['mcountinhibit']._blocks['CY'].val == 0:
+                self.csr.cycle[:] = self.csr.cycle[:] + 1  # = self.csr.minstret.all+1
             
         return True
         
@@ -412,46 +442,38 @@ setup_logging(logging.DEBUG)
 log = logging.getLogger(__name__)
 input_path = Path("tests/rv64/bin/p")
 
-tests = sorted(list(input_path.glob("rv64ui*")))
+tests = sorted(list(input_path.glob("rv64mi*")))
 length = [len(str(t.stem)) for t in tests]
-# print(*tests, sep="\n")
 
-tests = [Path("tests/rv64/bin/p/rv64si-p-scall.bin")]
+tests = [Path("tests/rv64/bin/p/rv64mi-p-ld-misaligned.bin")]
 
+for test in tests:
+    print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
+    ram = MemoryDevice.from_binary_file(test, "RAM")
+    sys_bus = SystemInterface()
+    sys_bus.register_device(ram, 0x8000_0000)
+    to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr=to_host_addr)
 
-# print(tests[0])
-# for test in tests:
-#     # symtab = elf.get_section_by_name('.symtab')
-#     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
-#     ram = MemoryDevice.from_binary_file(test, "RAM")
-#     sys_bus = SystemInterface()
-#     sys_bus.register_device(ram, 0x8000_0000)
-#     to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
-#     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U], to_host_addr=to_host_addr)
-#     # break
-#     while(h0.step()):
-#         pass
-    
-#     syscall_code = h0.regfile[17]
-#     syscall_data = h0.regfile[10] 
-#     if syscall_code==93: # exit code
-#         if syscall_data == 0:
-#             print(" ✅ Test PASSED")
-#         else:
-#             print(f" ❌ Test FAILED: {syscall_data>>1}")
-#     else:
-#         print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
-            
-#     # print(h0.csr.minstret)
-
-#     del h0
+    while(h0.step()):
+        pass
+    syscall_code = h0.regfile[17]
+    syscall_data = h0.regfile[10] 
+    if syscall_code==93: # exit code
+        if syscall_data == 0:
+            print(" ✅ Test PASSED")
+        else:
+            print(f" ❌ Test FAILED: {syscall_data>>1}")
+    else:
+        print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ") 
+    del h0
 
 
 
-csr = CsrFile([Ext.M])
-csr.mstatus.update_warl_blk("MPP", [1, 2, 3])
-csr.mepc.all=0x800001a8
-print(hex(csr.mepc.all))
+# csr = CsrFile([Ext.M])
+# csr.mstatus.update_warl_blk("MPP", [1, 2, 3])
+# csr.mepc.all=0x800001a8
+# print(hex(csr.mepc.all))
 # csr.mstatus.MPP = 1
 # # print(csr.mstatus.blk_wpri)
 # # print(bin(csr.mstatus.gen_wpri_mask()))
