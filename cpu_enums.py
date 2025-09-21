@@ -32,6 +32,16 @@ class Ops(Enum):
     custom2 = 0b10_110_11
     custom3 = 0b11_110_11
 
+class MISC_ALU_OP(Enum):
+    SUB  = 0b0_00
+    XOR  = 0b0_01
+    OR   = 0b0_10
+    AND  = 0b0_11
+    SUBW = 0b1_00
+    ADDW = 0b1_01
+    RES1 = 0b1_10
+    RES2 = 0b1_11
+    
 class Ops_C(Enum):
     ADDI4SPN = 0b000_00
     ADDI = 0b000_01
