@@ -61,7 +61,9 @@ class SystemInterface():
                 rel_addr = addr-st
                 dev = self.dev_map[st]
                 dev.write(addr=rel_addr, value=value, size=size)
-                log.debug(f"write {dev.name}: 0x{addr:X} <- 0x{value:0{size}x}")
+                # print(size)
+                mask = (1<<(size*8))-1
+                log.debug(f"write {dev.name}: 0x{addr:X} <- 0x{value&mask:0{size}x}")
                 return True
         
         raise Exception(f"no device registered in 0x{addr:X}")

@@ -8,8 +8,8 @@ class Ops(Enum):
     STORE = 0b01_000_11
     MADD = 0b10_000_11
     BRANCH = 0b11_000_11
-    LOAD_FP = 0b00_001_11
-    STORE_FP = 0b01_001_11
+    # LOAD_FP = 0b00_001_11
+    # STORE_FP = 0b01_001_11
     MSUB = 0b10_001_11
     JALR = 0b11_001_11
     custom0 = 0b00_010_11
@@ -31,6 +31,39 @@ class Ops(Enum):
     OP_32 = 0b01_110_11
     custom2 = 0b10_110_11
     custom3 = 0b11_110_11
+
+class Ops_C(Enum):
+    ADDI4SPN = 0b000_00
+    ADDI = 0b000_01
+    SLLI = 0b000_10
+    
+    FLD = 0b001_00
+    ADDIW = 0b001_01
+    FLDSP = 0b001_10
+
+    LW = 0b010_00
+    LI = 0b010_01
+    LWSP = 0b010_10
+    
+    LD = 0b011_00
+    LUI_ADDI16SP = 0b011_01
+    LDSP = 0b011_10
+    
+    reserved = 0b100_00
+    MISC_ALU = 0b100_01
+    JAL_JALR_MV_ADD = 0b100_10
+    
+    FSD = 0b101_00
+    J = 0b101_01
+    FSDSP = 0b101_10
+    
+    SW = 0b110_00
+    BEQZ = 0b110_01
+    SWSP = 0b110_10
+
+    SD = 0b111_00
+    BNEZ = 0b111_01
+    SDSP = 0b111_10
     
 class SYS_F12(Enum):
     ECALL = 0x000

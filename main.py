@@ -78,6 +78,21 @@ INSTR_BLK_MAP = {
     "I_csr" : [31,20]    
 }
 
+CINSTR_BLK_MAP = {
+    "C_op":[1,0],
+    "C_f2":[6,5],
+    "C_f3":[15,13],
+    "C_f4":[15,12],
+    "C_f6":[15,10],
+    "C_rd":[11,7],
+    "C_rs1":[11,7],
+    "C_rs2":[6,2],
+    "C_rd_prime":[4,2],
+    "C_rs1_prime":[9,7],
+    "C_rs2_prime":[4,2],
+    "C_jump_target":[12,2],
+}
+
 
 
 class RV64Hart():
@@ -99,6 +114,7 @@ class RV64Hart():
         
         self.mask64 = 0xffff_ffff_ffff_ffff
         self.mask32 = 0xffff_ffff
+        self.mask16 = 0xffff
 
         self.hartid : int = hartid
         self.sys_bus = bus
@@ -143,7 +159,7 @@ class RV64Hart():
         self.csr.mtvec.update_warl_blk("MODE", [0, 1]) # normal mode or vectored
         
 
-        self.terminate = False # used to stop the process whethever bad happends
+        # self.terminate = False # used to stop the process whethever bad happends
 
     def is_ext_impl(self, e: Ext):
         return (e in self.ext_list)
@@ -160,7 +176,7 @@ class RV64Hart():
             
             # check if the exception is delegated to S mode
             deleg_cond = (medeleg>>e.value)&0b1
-            # log.error(f"")
+
             log.error(f"--- Exception : {e.name}, Handle: {"S" if deleg_cond else "M"} ---")
 
             if deleg_cond:
@@ -235,6 +251,7 @@ class RV64Hart():
         ins = BlockReg(32, self.sys_bus.read(self.pc), INSTR_BLK_MAP)
         
         pc_plus_4 = self.pc+4
+        pc_plus_2 = self.pc+2
         self.new_pc = pc_plus_4
         
         new_rd = 0
@@ -248,9 +265,90 @@ class RV64Hart():
         self.inst_ret = True
         self.cnt_cycle = True
         
+        is_compressed = False
         
         # ---------------------------- DECODE -------------------------------- #
+        breakpoint_addr = 0 #0x8000_202a
         
+        
+        # ------------------- 16 bit to 32 bit stage decoder ----------------- #
+        
+        if ins[1:0] != 0b11:
+            new_ins = BlockReg(32, 0, INSTR_BLK_MAP)
+            new_ins.opcode=Ops.OP_IMM.value
+            base_reg = 0x8
+            # decode and create the 32 version of this compressed instruction
+            is_compressed = True
+            
+            ins_c = BlockReg(16, ins.all&self.mask16, CINSTR_BLK_MAP)
+            
+            c_opcode = Ops_C((ins_c.C_f3<<2) | (ins_c.C_op))
+            log.warning(c_opcode)
+            
+            # is_op_imm=False
+            if c_opcode==Ops_C.ADDI4SPN:
+                i_imm = (ins_c[12:11]<<4) | (ins_c[10:7]<<6) | (ins_c[6]<<2) | (ins_c[5]<<3)
+                new_ins.I_rd = ins_c.C_rd_prime+base_reg # from stack pointer
+                new_ins.I_rs1 = 2 # from stack pointer
+                new_ins.opcode = Ops.OP_IMM.value
+                
+            elif c_opcode==Ops_C.LUI_ADDI16SP:
+                if ins_c.C_rd!=2: # is a LUI
+                    log.warning(" -> LUI")
+                    u_imm = sign_extend((ins_c[12]<<17) | (ins_c[6:2]<<12), 18)
+                    new_ins.I_rd = ins_c.C_rd
+                    new_ins.opcode = Ops.LUI.value
+                else: #is add 16
+                    i_imm = sign_extend((ins_c[12]<<9)|(ins_c[6]<<4)|\
+                        (ins_c[5]<<6)|(ins_c[4:3]<<7)|(ins_c[2]<<5), 10)
+                    new_ins.I_rs1 = 2 # from stack pointer
+                    new_ins.I_rd = 2 # from stack pointer
+                    new_ins.opcode = Ops.OP_IMM.value
+            elif c_opcode in [Ops_C.ADDI,Ops_C.LI]:
+                i_imm = sign_extend((ins_c[12]<<5) | (ins_c[6:2]), 6)
+                if i_imm!=0 and ins_c.C_rd!=0:
+                    new_ins.I_rd = ins_c.C_rd
+                    new_ins.I_rs1 = 0 if c_opcode==Ops_C.LI else new_ins.I_rd
+                    new_ins.opcode = Ops.OP_IMM.value
+            elif c_opcode==Ops_C.ADDIW:
+                i_imm = sign_extend((ins_c[12]<<5) | (ins_c[6:2]), 6)
+                if ins_c.C_rd!=0:
+                    new_ins.I_rd = ins_c.C_rd
+                    new_ins.I_rs1 = new_ins.I_rd
+                    new_ins.opcode = Ops.OP_IMM_32.value
+            elif c_opcode in [Ops_C.LW, Ops_C.LD]: # LOAD
+                if c_opcode==Ops_C.LW:
+                    new_ins.I_f3 = 0b010
+                    i_imm = (ins_c[12:10]<<3)|(ins_c[6]<<2)|(ins_c[5]<<6)
+                elif c_opcode==Ops_C.LD:
+                    new_ins.I_f3 = 0b011
+                    i_imm = (ins_c[12:10]<<3)|(ins_c[6:5]<<6)
+                    
+                new_ins.I_rd = ins_c.C_rd_prime+base_reg
+                new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
+                new_ins.opcode = Ops.LOAD.value
+
+            elif c_opcode in [Ops_C.SW, Ops_C.SD]: # STORE
+                if c_opcode==Ops_C.SW:
+                    new_ins.I_f3 = 0b010
+                    s_imm = (ins_c[12:10]<<3)|(ins_c[6]<<2)|(ins_c[5]<<6)
+                elif c_opcode==Ops_C.SD:
+                    new_ins.I_f3 = 0b011
+                    s_imm = (ins_c[12:10]<<3)|(ins_c[6:5]<<6)
+                    
+                new_ins.I_rs2 = ins_c.C_rs2_prime+base_reg
+                new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
+                new_ins.opcode = Ops.STORE.value
+   
+            else:
+                log.error(f"compressed Opcode {c_opcode} not defined")
+                return False
+            
+            self.new_pc = pc_plus_2
+            
+            ins = new_ins
+        
+        # -------------- decode 32 bit instruction
         
         op = Ops(ins.opcode)
         if not self.handleException(): return False
@@ -259,13 +357,19 @@ class RV64Hart():
         r1 = self.regfile[ins.I_rs1]
         r2 = self.regfile[ins.I_rs2]
         
-        i_imm = sign_extend(ins[31:20], 12) & self.mask64
-        s_imm = sign_extend(ins[31:25]<<5 | ins[11:7], 12) & self.mask64
-        b_imm = sign_extend(ins[31]<<12 | ins[7]<<11 | \
-            ins[30:25]<<5 | ins[11:8] << 1, 12) & self.mask64
-        u_imm = sign_extend(ins[31:12]<<12, 32) & self.mask64
-        j_imm = sign_extend(ins[31]<<20 | ins[19:12]<<12 | \
-            ins[20]<<11 | ins[30:21] << 1, 20) & self.mask64
+        if is_compressed:
+            # define immediates differently
+            pass
+            
+        else:
+            i_imm = sign_extend(ins[31:20], 12) & self.mask64
+            s_imm = sign_extend(ins[31:25]<<5 | ins[11:7], 12) & self.mask64
+            b_imm = sign_extend(ins[31]<<12 | ins[7]<<11 | \
+                ins[30:25]<<5 | ins[11:8] << 1, 12) & self.mask64
+            u_imm = sign_extend(ins[31:12]<<12, 32) & self.mask64
+            j_imm = sign_extend(ins[31]<<20 | ins[19:12]<<12 | \
+                ins[20]<<11 | ins[30:21] << 1, 20) & self.mask64
+        
         # ---------------------------- EXECUTE ------------------------------- #
         
         if op in [Ops.JAL, Ops.OP, Ops.OP_32, Ops.OP_IMM, Ops.JALR,
@@ -315,7 +419,7 @@ class RV64Hart():
         elif op==Ops.MISC_MEM:
             pass
         elif op==Ops.STORE:
-            addr = ( r1 + s_imm) & self.mask64    
+            addr = ( r1 + s_imm) & self.mask64  
             if (addr == self.to_host_addr):
                 log.error("__to_host__")
                 return False
@@ -326,6 +430,7 @@ class RV64Hart():
             size_byte = 1<<(ins.I_f3&0b11) 
             
             if addr%size_byte!=0:
+                log.debug(f"load addr: {addr:08x}")
                 self.raiseException(ExceptionCode.LoadAddressMisaligned)
                 self.write_back = False
             else:
@@ -416,11 +521,11 @@ class RV64Hart():
             log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
             self.regfile[ins.I_rd] = new_rd
             
-        # if self.pc==0x8000_0208:
-        #     log.error("-- Breakpoint --")
-        #     print(f"self.new_pc: 0x{(self.new_pc & self.mask64):8x}")
-        #     print(hex(self.csr['mtvec'][1:0]))
-        #     return False
+        if self.pc==breakpoint_addr:
+            log.error("-- Breakpoint --")
+            print(f"self.new_pc: 0x{(self.new_pc & self.mask64):8x}")
+            print(hex(self.csr['mtvec'][1:0]))
+            return False
 
         self.pc = self.new_pc & self.mask64
         
@@ -445,7 +550,7 @@ input_path = Path("tests/rv64/bin/p")
 tests = sorted(list(input_path.glob("rv64mi*")))
 length = [len(str(t.stem)) for t in tests]
 
-tests = [Path("tests/rv64/bin/p/rv64mi-p-ld-misaligned.bin")]
+tests = [Path("tests/rv64/bin/p/rv64uc-p-rvc.bin")]
 
 for test in tests:
     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
