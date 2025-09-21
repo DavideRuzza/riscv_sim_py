@@ -268,8 +268,7 @@ class RV64Hart():
         is_compressed = False
         
         # ---------------------------- DECODE -------------------------------- #
-        breakpoint_addr = 0#x800021c6
-        
+        breakpoint_addr = 0#x8000224e
         
         # ------------------- 16 bit to 32 bit stage decoder ----------------- #
         
@@ -332,6 +331,16 @@ class RV64Hart():
                 new_ins.I_rd = ins_c.C0_rd_prime+base_reg
                 new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
                 new_ins.opcode = Ops.LOAD.value
+            elif c_opcode in [Ops_C.LWSP, Ops_C.LDSP]: # LOAD
+                if c_opcode==Ops_C.LWSP:
+                    new_ins.I_f3 = 0b010
+                    i_imm = (ins_c[12]<<5)|(ins_c[6:4]<<2)|(ins_c[3:2]<<6)
+                elif c_opcode==Ops_C.LDSP:
+                    new_ins.I_f3 = 0b011
+                    i_imm = (ins_c[12]<<5)|(ins_c[6:5]<<3)|(ins_c[4:2]<<6)
+                new_ins.I_rd = ins_c.C_rd
+                new_ins.I_rs1 = 2
+                new_ins.opcode = Ops.LOAD.value
             elif c_opcode in [Ops_C.SW, Ops_C.SD]: # STORE
                 if c_opcode==Ops_C.SW:
                     new_ins.I_f3 = 0b010
@@ -341,6 +350,16 @@ class RV64Hart():
                     s_imm = (ins_c[12:10]<<3)|(ins_c[6:5]<<6) 
                 new_ins.I_rs2 = ins_c.C_rs2_prime+base_reg
                 new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
+                new_ins.opcode = Ops.STORE.value
+            elif c_opcode in [Ops_C.SWSP, Ops_C.SDSP]: # STORE
+                if c_opcode==Ops_C.SWSP:
+                    new_ins.I_f3 = 0b010
+                    s_imm = (ins_c[12:9]<<2)|(ins_c[8:7]<<6)
+                elif c_opcode==Ops_C.SDSP:
+                    new_ins.I_f3 = 0b011
+                    s_imm = (ins_c[12:10]<<3)|(ins_c[9:7]<<6) 
+                new_ins.I_rs2 = ins_c.C_rs2
+                new_ins.I_rs1 = 2
                 new_ins.opcode = Ops.STORE.value
             elif c_opcode==Ops_C.MISC_ALU:
                 if ins_c.C_f2_prime in [0b00, 0b01, 0b10]: # SRLI, SRAI, ANDI
@@ -417,6 +436,37 @@ class RV64Hart():
                 new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
                 new_ins.I_rs2 = 0
                 log.warning("-> BEQZ" if c_opcode==Ops_C.BEQZ else "BNEZ")
+            elif c_opcode==Ops_C.JAL_JALR_MV_ADD:
+                if ins_c.C_rs2==0:
+                    if ins_c[12]==0:
+                        log.warning("-> JR")
+                        new_ins.opcode=Ops.JALR.value
+                        new_ins.I_rs1 = ins_c.C_rs1
+                        new_ins.I_rd = 0
+                        i_imm=0
+                    else:
+                        if ins_c.C_rs1!=0:
+                            log.warning("-> JALR")
+                            new_ins.opcode=Ops.JALR.value
+                            new_ins.I_rs1 = ins_c.C_rs1
+                            new_ins.I_rd = 1
+                            i_imm=0
+                        else:
+                            log.warning("-> BREAK")
+                            new_ins.I_f12 = 0b1
+                            new_ins.opcode=Ops.SYSTEM.value
+                else:
+                    new_ins.opcode=Ops.OP.value
+                    new_ins.I_f3 = OP_F3.ADD_SUB.value
+                    new_ins.I_f7 = 0
+                    new_ins.I_rs2 = ins_c.C_rs2
+                    new_ins.I_rd = ins_c.C_rd
+                    if ins_c[12]==0: # MV
+                        log.warning("-> MV")
+                        new_ins.I_rs1 = 0
+                    else: # ADD
+                        log.warning("-> ADD")
+                        new_ins.I_rs1 = new_ins.I_rd
             else:
                 log.error(f"compressed Opcode {c_opcode} not defined")
                 return False
@@ -456,13 +506,13 @@ class RV64Hart():
         if op==Ops.ILLEGAL:
             self.raiseException(ExceptionCode.IllegalInstruction) 
         elif op==Ops.JAL:
+            new_rd = self.new_pc
             self.new_pc = self.pc+j_imm
-            new_rd = self.new_pc
         elif op==Ops.JALR:
-            self.new_pc = (r1 + i_imm) & (self.mask64-1)
             new_rd = self.new_pc
+            self.new_pc = (r1 + i_imm) & (self.mask64-1)
         elif op==Ops.OP:
-            print(ins.I_rs1, ins.I_rs2)
+            # print(ins.I_rs1, ins.I_rs2)
             new_rd = alu(r1, r2, OP_F3(ins.I_f3), ins.I_f7)
         elif op==Ops.OP_32:
             f3 = OP_F3(ins.I_f3)
@@ -484,8 +534,6 @@ class RV64Hart():
             res32 = alu(r1, i_imm, f3, f7, True) 
             new_rd = sign_extend(res32 & self.mask32, 32)
         elif op==Ops.BRANCH:
-            print(self.reg_names[ins.I_rs1], ins.I_rs2)
-            print(hex(r1), hex(r2))
             if branch_unit(r1, r2, BR_F3(ins.I_f3)):
                 log.info("taken")
                 self.new_pc = self.pc + b_imm
@@ -619,8 +667,8 @@ class RV64Hart():
         return True
         
 
-setup_logging(logging.DEBUG)
-# setup_logging(logging.CRITICAL)
+# setup_logging(logging.DEBUG)
+setup_logging(logging.CRITICAL)
 
 
 log = logging.getLogger(__name__)
