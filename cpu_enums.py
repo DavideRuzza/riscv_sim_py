@@ -3,34 +3,37 @@ from enum import Enum
 
 class Ops(Enum):
 
-    ILLEGAL = 0b00_000_00
-    LOAD = 0b00_000_11
-    STORE = 0b01_000_11
-    MADD = 0b10_000_11
-    BRANCH = 0b11_000_11
-    # LOAD_FP = 0b00_001_11
-    # STORE_FP = 0b01_001_11
-    MSUB = 0b10_001_11
-    JALR = 0b11_001_11
-    custom0 = 0b00_010_11
-    custom1 = 0b01_010_11
-    MNSUB = 0b10_010_11
-    MISC_MEM = 0b00_011_11
-    AMO = 0b01_011_11
-    NMADD = 0b10_011_11
-    JAL = 0b11_011_11
-    OP_IMM = 0b00_100_11
-    OP = 0b01_100_11
-    OP_FP = 0b10_100_11
-    SYSTEM = 0b11_100_11
-    AUIPC = 0b00_101_11
-    LUI = 0b01_101_11
-    OP_V = 0b10_101_11
-    OP_VE = 0b11_101_11
-    OP_IMM_32 = 0b00_110_11
-    OP_32 = 0b01_110_11
-    custom2 = 0b10_110_11
-    custom3 = 0b11_110_11
+    ILLEGAL     = 0b00_000_00
+    LOAD        = 0b00_000_11
+    STORE       = 0b01_000_11
+    MADD        = 0b10_000_11
+    BRANCH      = 0b11_000_11
+    # LOAD_FP   = 0b00_001_11
+    # STORE_FP  = 0b01_001_11
+    MSUB        = 0b10_001_11
+    JALR        = 0b11_001_11
+    custom0     = 0b00_010_11
+    custom1     = 0b01_010_11
+    MNSUB       = 0b10_010_11
+    MISC_MEM    = 0b00_011_11
+    AMO         = 0b01_011_11
+    NMADD       = 0b10_011_11
+    JAL         = 0b11_011_11
+    
+    OP_IMM      = 0b00_100_11
+    OP          = 0b01_100_11
+    
+    OP_FP       = 0b10_100_11
+    SYSTEM      = 0b11_100_11
+    AUIPC       = 0b00_101_11
+    LUI         = 0b01_101_11
+    OP_V        = 0b10_101_11
+    OP_VE       = 0b11_101_11
+    
+    OP_IMM_32   = 0b00_110_11
+    OP_32       = 0b01_110_11
+    custom2     = 0b10_110_11
+    custom3     = 0b11_110_11
 
 class MISC_ALU_OP(Enum):
     SUB  = 0b0_00
@@ -90,6 +93,16 @@ class OP_F3(Enum):
     SRX =  0b101
     OR = 0b110 
     AND = 0b111
+
+class OP_MUL_F3(Enum):
+    MUL =  0b000
+    MULH = 0b001
+    MULHSU = 0b010
+    MULHU = 0b011
+    DIV = 0b100
+    DIVU = 0b101
+    REM = 0b110
+    REMU = 0b111
     
 class LD_F3(Enum):
     LB = 0b000

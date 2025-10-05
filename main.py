@@ -6,12 +6,12 @@ from system_interface import SystemInterface
 from logger_config import setup_logging
 from pathlib import Path
 from typing import List, Dict, Tuple
-
+# from math import abs
 # # Max allowed repeats within recent jumps
 # MAX_JUMP_REPEAT = 20
 
 
-def shift_unit(op, shamt, f3:OP_F3, f7:int, op32:bool=False):
+def shift_unit(op, shamt, f3:OP_F3, f7:int, op32: bool=False):
     
     xlen = 32 if op32 else 64
     shamt = shamt&0b11111 if op32 else shamt&0b111111
@@ -26,9 +26,51 @@ def shift_unit(op, shamt, f3:OP_F3, f7:int, op32:bool=False):
             return (op&mask)>>shamt
     else:
         raise Exception(f"{f3} not implemented in shift unit")
-    
-def alu(op1:int, op2:int, f3: OP_F3, f7: int, op32:bool=False):    
-    if f3==OP_F3.ADD_SUB:
+
+def sign(num):
+    return -1 if num<0 else 1
+
+def sign64(num):
+    return -1 if (num>>64)==1 else 1
+
+def sign32(num):
+    return -1 if (num>>32)==1 else 1
+ 
+def alu(op1:int, op2:int, f3: OP_F3, f7: int, op32: bool=False, op_imm:bool=False):  
+
+    if not op_imm and f7&0b1==1: # is_M
+        mf3 = OP_MUL_F3(f3.value)
+        # print(hex(op1), hex(op2))
+        # print(abs(int_64(op1)), abs(int_64(op2)))
+        log.error(mf3)
+        s_op1 = int_64(op1)
+        s_op2 = int_64(op2)
+        if mf3==OP_MUL_F3.DIV:
+            s = sign(s_op1)*sign(s_op2) # find sign
+            if op2==0: return -1
+            else: return s*(abs(s_op1)//abs(s_op2))
+        if mf3==OP_MUL_F3.DIVU:
+            if op2==0: return -1
+            else: return op1//op2
+        if mf3==OP_MUL_F3.REM:
+            s = sign(int_64(op1)) # find sign
+            if op2==0: return op1
+            else: return s*(abs(s_op1)%abs(s_op2))
+        if mf3==OP_MUL_F3.REMU:                
+            s = sign(int_64(op1)) # find sign
+            if op2==0: return op1
+            else: return op1%op2
+        if mf3==OP_MUL_F3.MUL:
+            return s_op1*s_op2
+        if mf3==OP_MUL_F3.MULH:
+            return (s_op1*s_op2)>>64
+        if mf3==OP_MUL_F3.MULHU:
+            return (op1*op2)>>64
+        if mf3==OP_MUL_F3.MULHSU:
+            return (s_op1*op2)>>64
+        else:
+            raise Exception(f"M extension f3 {mf3} not implemented")
+    elif f3==OP_F3.ADD_SUB:
         if f7:
             return op1-op2
         else:
@@ -135,7 +177,7 @@ class RV64Hart():
         self.write_csr = False
         self.inst_ret = True
         self.cnt_cycle = True
-        self.breakpoint_addr = 0 #0x8000_03a0
+        self.breakpoint_addr = 0 #0x8000_0218
         
         # ------------- SETUP CSR
         self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
@@ -243,8 +285,7 @@ class RV64Hart():
             self.set_mode(Mode.S)
         else:
             self.set_mode(Mode.U)
-        
-        # print("IMPL", self.is_ext_impl(Ext.U))
+
         self.csr.mstatus.SPP = 0b0
         return self.csr.sepc.all
      
@@ -517,26 +558,27 @@ class RV64Hart():
             self.new_pc = (r1 + i_imm) & (self.mask64-1)
         elif op==Ops.OP:
             # print(ins.I_rs1, ins.I_rs2)
-            new_rd = alu(r1, r2, OP_F3(ins.I_f3), ins.I_f7)
+            new_rd = alu(r1, r2, OP_F3(ins.I_f3), ins.I_f7, False, False)
         elif op==Ops.OP_32:
             f3 = OP_F3(ins.I_f3)
-            res32 = alu(r1, r2, f3, ins.I_f7, True) 
+            res32 = alu(r1, r2, f3, ins.I_f7, True, False) 
             new_rd = sign_extend(res32 & self.mask32, 32)
         elif op==Ops.OP_IMM:
+            
             f3 = OP_F3(ins.I_f3)
             cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
             f7 = ins.I_f7 if cond else 0
-            if f3==OP_F3.SRX:# for SRAI and SRLI f7 is actually only the top 6 bits
-                f7 >>= 1
-            new_rd = alu(r1, i_imm, f3, f7)
+            # if f3==OP_F3.SRX:# for SRAI and SRLI f7 is actually only the top 6 bits
+            #     f7 >>= 1
+            new_rd = alu(r1, i_imm, f3, f7, False, True)          
         elif op==Ops.OP_IMM_32:
             f3 = OP_F3(ins.I_f3)
             cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
             f7 = ins.I_f7 if cond else 0
-            if f3==OP_F3.SRX: 
-                f7 >>= 1
-            res32 = alu(r1, i_imm, f3, f7, True) 
-            new_rd = sign_extend(res32 & self.mask32, 32)
+            # if f3==OP_F3.SRX: 
+            #     f7 >>= 1
+            res32 = alu(r1, i_imm, f3, f7, True, True) 
+            new_rd = sign_extend(res32 & self.mask32, 32)            
         elif op==Ops.BRANCH:
             if branch_unit(r1, r2, BR_F3(ins.I_f3)):
                 log.info("taken")
@@ -653,8 +695,6 @@ class RV64Hart():
             
             # print(hex(self.csr['mtvec'][1:0]))
             # print(self.regfile)
-
-        self.pc = self.new_pc & self.mask64
         
         if self.inst_ret:
             if self.csr['mcountinhibit']._blocks['IR'].val == 0:
@@ -669,20 +709,23 @@ class RV64Hart():
             print(f"self.new_pc: 0x{(self.new_pc & self.mask64):8x}")
             return False
         
+        self.pc = self.new_pc & self.mask64
+        
         return True
         
-setup_logging(logging.DEBUG)
-# setup_logging(logging.CRITICAL)
+# setup_logging(logging.DEBUG)
+setup_logging(logging.CRITICAL)
 
 log = logging.getLogger(__name__)
 input_path = Path("tests/rv64/bin/p")
 
-tests = sorted(list(input_path.glob("rv64mi-p-*.bin")))
+tests = sorted(list(input_path.glob("rv64um-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
-tests = [Path("tests/rv64/bin/p/rv64mi-p-illegal.bin")]
-# tests = [Path("xv6-riscv/kernel.bin")]
 
+# tests = [Path("tests/rv64/bin/p/rv64um-p-div.bin")]
+# tests = [Path("xv6-riscv/kernel.bin")]
+# tests = [tests[10]]
 RISCV_TEST = True
 DEBUG = 0
 
