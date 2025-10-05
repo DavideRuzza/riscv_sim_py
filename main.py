@@ -318,17 +318,19 @@ class RV64Hart():
         # ---------------- 16 bit to 32 bit stage translation ---------------- #
         
         if ins[1:0] != 0b11:
-            
             new_ins = BlockReg(32, 0, INSTR_BLK_MAP)
-            if new_ins[:] != 0:
+            
+            if ins[15:0] != 0:
+                # print("is Compressed")
                 
                 new_ins.opcode=Ops.OP_IMM.value
                 base_reg = 0x8
                 # decode and create the 32 version of this compressed instruction
                 is_compressed = True
-                
                 ins_c = BlockReg(16, ins.all&self.mask16, CINSTR_BLK_MAP)
                 
+                # print((ins_c.C_f3<<2) | (ins_c.C_op))
+                ins_c = BlockReg(16, ins.all&self.mask16, CINSTR_BLK_MAP)
                 c_opcode = Ops_C((ins_c.C_f3<<2) | (ins_c.C_op))
                 log.warning(c_opcode)
                 
@@ -713,8 +715,13 @@ class RV64Hart():
         
         return True
         
-# setup_logging(logging.DEBUG)
-setup_logging(logging.CRITICAL)
+RISCV_TEST = 0
+DEBUG = 1
+
+if DEBUG:
+    setup_logging(logging.DEBUG)
+else:
+    setup_logging(logging.CRITICAL)
 
 log = logging.getLogger(__name__)
 input_path = Path("tests/rv64/bin/p")
@@ -724,22 +731,24 @@ length = [len(str(t.stem)) for t in tests]
 
 
 # tests = [Path("tests/rv64/bin/p/rv64um-p-div.bin")]
-# tests = [Path("xv6-riscv/kernel.bin")]
+tests = [Path("xv6-riscv/kernel.bin")]
 # tests = [tests[10]]
-RISCV_TEST = True
-DEBUG = 0
 
 for test in tests:
-    print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", end='', flush=True)
+    print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", 
+          end='\n' if DEBUG else '', flush=True)
+    
     ram = MemoryDevice.from_binary_file(test, "RAM")
+    ram.expand(0x10000)
     sys_bus = SystemInterface()
     sys_bus.register_device(ram, 0x8000_0000)
+    print(sys_bus)
     if RISCV_TEST:
         to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
     else:
         to_host_addr=0
     
-    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C], to_host_addr=to_host_addr)
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M], to_host_addr=to_host_addr)
 
     break_debug=True
     while(h0.step() and break_debug):

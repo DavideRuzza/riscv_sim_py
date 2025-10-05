@@ -118,5 +118,11 @@ class MemoryDevice(BaseDevice):
 
         return newdev
     
+    def expand(self, end: int):
+        new_size = self.round4Kb(end+self.size)
+        data = self.mem+b'\x00'*(new_size-self.size)
+        self.size = new_size
+        self.mem = data
+    
     
     
