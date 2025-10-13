@@ -8,8 +8,8 @@ class Ops(Enum):
     STORE       = 0b01_000_11
     MADD        = 0b10_000_11
     BRANCH      = 0b11_000_11
-    # LOAD_FP   = 0b00_001_11
-    # STORE_FP  = 0b01_001_11
+    LOAD_FP     = 0b00_001_11
+    STORE_FP    = 0b01_001_11
     MSUB        = 0b10_001_11
     JALR        = 0b11_001_11
     custom0     = 0b00_010_11
@@ -35,6 +35,16 @@ class Ops(Enum):
     custom2     = 0b10_110_11
     custom3     = 0b11_110_11
 
+class FP_ROUND_MODE(Enum):
+    RNE = 0b000
+    RTZ = 0b001
+    RDN = 0b010
+    RUP = 0b011
+    RMM = 0b100
+    RES1 = 0b101
+    RES2 = 0b110
+    DYN = 0b111
+    
 class MISC_ALU_OP(Enum):
     SUB  = 0b0_00
     XOR  = 0b0_01
@@ -94,6 +104,16 @@ class OP_F3(Enum):
     OR = 0b110 
     AND = 0b111
 
+class F_OP_F5(Enum):
+    FADD = 0b00000
+    FSUB = 0b00001
+    FMUL = 0b00010
+    FDIV = 0b00011
+    FSQRT = 0b01011
+    FSGN  = 0b01100
+    FMINMAX = 0b00101
+    
+    
 class OP_MUL_F3(Enum):
     MUL =  0b000
     MULH = 0b001
@@ -229,8 +249,14 @@ CSR_M = {
             }, None),
     
     "mideleg":  (0x303, 64, {}, {}, None),
-    "mie":      (0x304, 64, {"SSIE": [1], "MSIE": [3], "STIE": [5], "MTIE": [7],
-                        "SEIE": [9], "MEIE": [11], "LCOFIE": [13]}, {}, None),
+    "mie":      (0x304, 64, {
+                "SSIE": [1], "VSSIE": [2], "MSIE": [3], "STIE": [5], 
+                "VSTIE": [6], "MTIE": [7], "SEIE": [9], "VSEIE": [10],
+                "MEIE": [11], "SGEIE": [12], "LCOFIE": [13]
+                }, {
+                    "WRPI_0":[0], "WRPI_1":[4], "WRPI_2":[8], "WRPI_3":[63,14],
+                }, None),
+    
     "mtvec":    (0x305, 64, {"BASE": [63, 2], "MODE": [1, 0]}, {}, None),
     "mcountern":(0x306, 32, {}, {}, None),
     "mcountinhibit":(0x320, 32, {
@@ -241,9 +267,15 @@ CSR_M = {
     "mepc":     (0x341, 64, {}, {}, None),
     "mcause":   (0x342, 64, {"INT":[63], "CODE": [62, 0]}, {}, None),
     "mtval":    (0x343, 64, {}, {}, None),
-    "mip":      (0x344, 64, {"SSIP": [1], "MSIP": [3], "STIP": [5], "MTIP": [7],
-                        "SEIP": [9], "MEIP": [11], "LCOFIP": [13]}, {}, None),
-    
+    # "mip":      (0x344, 64, {"SSIP": [1], "MSIP": [3], "STIP": [5], "MTIP": [7],
+    #                     "SEIP": [9], "MEIP": [11], "LCOFIP": [13]}, {}, None),
+    "mip":      (0x344, 64, {
+                "SSIP": [1], "VSSIP": [2], "MSIP": [3], "STIP": [5], 
+                "VSTIP": [6], "MTIP": [7], "SEIP": [9], "VSEIP": [10],
+                "MEIP": [11], "SGEIP": [12], "LCOFIP": [13]
+                }, {
+                    "WRPI_0":[0], "WRPI_1":[4], "WRPI_2":[8], "WRPI_3":[63,14],
+                }, None),
     # mtinst
     # mtval2
     
@@ -278,18 +310,51 @@ CSR_M = {
     
     
     "satp":     (0x180, 64, {}, {}, None), 
+    "sie":      (0x104, 64, {
+                "SSIE": [1], "STIE": [5], "SEIE": [9], "LCOFIE": [13]
+                }, {
+                    "WRPI_0":[0], "WRPI_1":[4, 2], "WRPI_2":[8,6],
+                    "WRPI_3":[12, 10], "WRPI_4":[63,14],
+                }, 'mie'),
+    
     "stvec":    (0x105, 64, {"BASE": [63, 2], "MODE": [1, 0]}, {}, None), 
     "scountern":(0x106, 64, {}, {}, None), 
     "sscratch": (0x140, 64, {}, {}, None),
     "sepc":     (0x141, 64, {}, {}, None),
     "scause":   (0x142, 64, {"INT":[63], "CODE": [62, 0]}, {}, None),
     
+    "sip":      (0x344, 64, {
+                "SSIP": [1], "STIP": [5], "SEIP": [9], "LCOFIP": [13]
+                }, {
+                    "WRPI_0":[0], "WRPI_1":[4, 2], "WRPI_2":[8,6],
+                    "WRPI_3":[12, 10], "WRPI_4":[63,14],
+                }, 'mip'),
 # }
 
 # CSR_U = {
     "cycle":    (0xc00, 64, {}, {}, "mcycle"), 
-    "instret":    (0xc02, 64, {}, {}, "minstret"), 
+    "instret":  (0xc02, 64, {}, {}, "minstret"), 
     
+    
+    "fcsr":     (0x003, 32, {
+                    "FRM": [7,5], "NV":[4], "DZ":[3],
+                    "OF":[2], "UF":[1], "NX":[0]
+                }, {
+                    #"WPRI_0": [31, 8]
+                }, None),
+
+    "frm":     (0x002, 32, {
+                    "FRM": [2,0]
+                }, {
+                    #"WPRI_0": [31, 3]
+                }, 'fcsr.FRM'),
+    
+    "fflags":     (0x001, 32, {
+                    "NV":[4], "DZ":[3],
+                    "OF":[2], "UF":[1], "NX":[1]
+                }, {
+                    #"WPRI_0": [31, 5]
+                }, 'fcsr'),
 }
  
 # CSR_U = {

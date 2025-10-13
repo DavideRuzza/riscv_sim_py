@@ -177,6 +177,27 @@ class RegSlice():
         else:
             self.mask = 0b1
             self.nbits = 1
+    
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            start = key.start
+            end = key.stop
+            
+            if start == None and end==None:
+                return self.val
+            if start == None:
+                start = self.nbits-1
+            if end == None:
+                end = 0
+            
+            print(self.nbits, start, end)
+            assert self.nbits>start>end>=0, "Slice error, check indexes"
+            start += self.lsb
+            stop += self.lsb
+            return (self.val>>end) & ((1<<(start-end+1))-1)
+        else:
+            assert self.nbits>key>=0, "index out of bound"
+            return (self.val>>key+self.lsb) & 0x01
         
     @property
     def val(self)->int:
@@ -292,7 +313,7 @@ class CsrReg():
             sections: Dict[str, List[int]],
             blk_warl : Dict[str, List[int]] = {}, 
             blk_wpri : Dict[str, List[int]] = {},
-            reg :Reg = None,
+            reg : Reg = None,
         ):
         
         if reg==None:
@@ -371,6 +392,7 @@ class CsrReg():
                 
                 # then write all the blocks separately
                 for name, bits in self._blk_bit_map.items():
+                    print(name, bits)
                     # sub_blk = self._blocks[attr]
                     if name in self.blk_wpri:
                         continue
@@ -466,12 +488,6 @@ class CsrFile():
         self.addr_to_name : Dict[int, str] = {}
         
         self.add_csr_dict(CSR_M)
-        # for ext in self.ext_list:
-        #     if   ext==Ext.M: self.add_csr_dict(CSR_M)
-        #     elif ext==Ext.S: self.add_csr_dict(CSR_S)
-        #     elif ext==Ext.U: self.add_csr_dict(CSR_U)
-        #     else:
-        #         raise AssertionError(f"unknown extension {ext.name}")
         
     def add_csr_dict(self, 
             csr_dict : Dict[int, Tuple[str, int, Dict[str, List[int]]]]):
@@ -480,10 +496,23 @@ class CsrFile():
             addr, xlen, block_map, wpri, shadow = value
             
             if shadow:
-                self.csr_map[addr] = CsrReg(
-                    addr, name, 
-                    xlen, block_map,
-                    blk_wpri=wpri, reg=self[shadow].reg)
+                if '.' in shadow:
+                    base, block = shadow.split(".")
+                    # print(base, block, self[base]._blocks[block])
+                    self.csr_map[addr] = CsrReg(
+                        addr, name, 
+                        xlen, block_map,
+                        blk_wpri=wpri)
+                    # print()
+                    shw_blk = self[base]._blocks[block]
+                    self.csr_map[addr]._blocks['_base0'] = shw_blk
+                    self.csr_map[addr]._blk_bit_map['_base0'] = [shw_blk.nbits,0]
+                    # print(self.csr_map[addr]._blocks)
+                else:
+                    self.csr_map[addr] = CsrReg(
+                        addr, name, 
+                        xlen, block_map,
+                        blk_wpri=wpri, reg=self[shadow].reg)
             else:
                 self.csr_map[addr] = CsrReg(
                     addr, name, 

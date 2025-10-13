@@ -110,6 +110,7 @@ INSTR_BLK_MAP = {
     "opcode" : [6, 0],
     "I_f12" : [31,20],
     "I_f7" : [31,25],
+    "I_f5" : [31,27],
     "I_f3" : [14,12],
     "I_rd" : [11,7],
     "I_rs1" : [19,15],
@@ -144,6 +145,8 @@ class RV64Hart():
     'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 's2',
     's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10', 's11', 
     't3', 't4', 't5', 't6']
+    
+    f_reg_names=['f'+str(i) for i in range(32)]
 
     def __init__(self, 
             hartid, 
@@ -162,6 +165,8 @@ class RV64Hart():
         self.ext_list : List[Ext] = [Ext.M]+extension_list
         
         self.regfile = RegFile(32, self.xlen, self.reg_names)
+        self.f_regfile = RegFile(32, self.xlen, self.f_reg_names)
+        
         self.csr = CsrFile(self.ext_list)
         self.pc_rst = entry_point
         
@@ -300,6 +305,7 @@ class RV64Hart():
         self.new_pc = pc_plus_4
         
         new_rd = 0
+        to_float_reg = False
         
         csr_key = 0
         new_csr = 0
@@ -613,7 +619,29 @@ class RV64Hart():
                 f3_l = LD_F3(ins.I_f3)
                 # print(size_byte)
                 if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
-                    new_rd = sign_extend(new_rd, size_byte*8)         
+                    new_rd = sign_extend(new_rd, size_byte*8)
+        elif op==Ops.LOAD_FP:
+            addr = ( r1 + i_imm) & self.mask64   
+            
+            
+            # 010 (2) for W; 011 (3) for D; 100 (4) for Q; 
+            size_byte = 1<<ins.I_f3
+            # print(size_byte, ins.I_f3)
+            
+            new_rd = self.sys_bus.read(addr, size_byte)
+            to_float_reg = True
+            self.write_back = True
+            
+            # return False
+        elif op==Ops.OP_FP:
+            f_f5 = F_OP_F5(ins.I_f5)
+            
+            if f_f5==F_OP_F5.FADD:
+                pass
+            else:
+                raise Exception(f"OP_FP not implemented {f_f3}")
+        
+         
         elif op==Ops.SYSTEM:
             if ins.I_f3 == 0:
                 f12 = SYS_F12(ins.I_f12)
@@ -693,7 +721,11 @@ class RV64Hart():
 
         if self.write_back:
             log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
-            self.regfile[ins.I_rd] = new_rd
+            
+            if to_float_reg:
+                self.f_regfile[ins.I_rd] = new_rd
+            else:
+                self.regfile[ins.I_rd] = new_rd
             
             # print(hex(self.csr['mtvec'][1:0]))
             # print(self.regfile)
@@ -715,8 +747,9 @@ class RV64Hart():
         
         return True
         
-RISCV_TEST = 0
+RISCV_TEST = 1
 DEBUG = 1
+FREERUN = 1
 
 if DEBUG:
     setup_logging(logging.DEBUG)
@@ -726,13 +759,13 @@ else:
 log = logging.getLogger(__name__)
 input_path = Path("tests/rv64/bin/p")
 
-tests = sorted(list(input_path.glob("rv64um-p-*.bin")))
+tests = sorted(list(input_path.glob("rv64uf-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
 
-# tests = [Path("tests/rv64/bin/p/rv64um-p-div.bin")]
-tests = [Path("xv6-riscv/kernel.bin")]
-# tests = [tests[10]]
+tests = [Path("tests/rv64/bin/p/rv64uf-p-fadd.bin")]
+# tests = [Path("xv6-riscv/kernel.bin")]
+tests = [tests[0]]
 
 for test in tests:
     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", 
@@ -752,7 +785,7 @@ for test in tests:
 
     break_debug=True
     while(h0.step() and break_debug):
-        if DEBUG:
+        if DEBUG and not FREERUN:
             while True: # Debugger
                 cmd = input("> ")
                 cmd : List[str] = [c.lower() for c in cmd.strip().split(" ")]
