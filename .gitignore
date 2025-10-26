@@ -3,3 +3,4 @@ riscv-unified-db/
 manual/
 isa/
 xv6-riscv
+*.drawio

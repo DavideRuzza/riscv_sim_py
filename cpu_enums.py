@@ -104,7 +104,7 @@ class OP_F3(Enum):
     OR = 0b110 
     AND = 0b111
 
-class F_OP_F5(Enum):
+class FP_OP_F5(Enum):
     FADD = 0b00000
     FSUB = 0b00001
     FMUL = 0b00010
