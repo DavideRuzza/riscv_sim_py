@@ -50,9 +50,13 @@ def pack_fp(in_f:float, width=32):
     
 def find_msb(num):
     bin_num = bin(num)[2:]
-    return len(bin_num) - 1 - bin_num.index('1')
+    try:
+        return len(bin_num) - 1 - bin_num.index('1')
+    except ValueError:
+        return -1
+    
 
-n = 0x4060_0000 # 3.5
+# n = 0x4060_0000 # 3.5
 
 
 # print(find_msb(n))
@@ -84,10 +88,12 @@ FP_blocks_op = {
 def to_op_fp_reg(in_f: Union[BlockReg, float], width=32):
     assert width in [16, 32, 64], "non standard float width"
     
-    if type(in_f)==float or type(in_f)==int:
+    if type(in_f)==float:
         in_f = float(in_f)
         pack_fp = pack_f64(in_f) if width==64 else (pack_f16(in_f) if width==16 else pack_f32(in_f))
         return to_op_fp_reg(BlockReg(width, pack_fp, FP_blocks[width]), width)
+    elif type(in_f)==int:
+        return to_op_fp_reg(BlockReg(width, in_f, FP_blocks[width]), width)
     elif isinstance(in_f, BlockReg):
         s = in_f.nbits
         if s in [16, 32, 64]:
@@ -147,7 +153,6 @@ def full_bin(num, l=32):
     bin_str = bin(num)[2:]
     return '0'*(l-len(bin_str))+bin_str
 
-
 def pretty_print_float(
             in_f: Union[Reg, BlockReg, float], 
             size=32, 
@@ -165,7 +170,7 @@ def pretty_print_float(
         head_str = [
             "S", 
             f"{'Exp':<{blk_sz['E']+1}}"
-            f"{'  Mantissa':<{blk_sz['M']+2}}",
+            f"{'  Mantissa':<{blk_sz['M']+3}}",
             "GRS",
             ]
 
@@ -180,7 +185,7 @@ def pretty_print_float(
         head_str = [
             "S", 
             f"{'Exp':<{blk_sz['E']+1}}"
-            f"{'Mantissa':<{blk_sz['M']+1}}",
+            f"{'Mantissa':<{blk_sz['M']+3}}",
             ]
 
         fp_str = [
@@ -210,7 +215,56 @@ class fpReg(BlockReg):
         fp = to_op_fp_reg(num, width)
         super().__init__(width+5, fp[:], FP_blocks_op[width])
         self.fp_width=width
+        
+        self.mask_exp = (1<<(self._blocks['E'].nbits+1))-1
+        self.quiet_bit = 1<<self._blocks['M'].nbits
+        self.mask_payload = self.quiet_bit-1
 
+    @classmethod
+    def from_op_reg(cls, blk_reg: BlockReg):
+        width = blk_reg.nbits-5
+        obj = cls(0, width)
+        obj.S = blk_reg.S
+        obj.E = blk_reg.E
+        obj.FM = blk_reg.FM
+        return obj
+
+    def to_Inf(self, neg = False):
+        self.reg=0
+        self.S = 1 if neg else 0
+        self.E = self.mask_exp
+        self.M = 0
+        self.UM = 1
+    
+    def to_NaN(self):
+        self.reg=0
+        self.S = 0
+        self.E = self.mask_exp
+        self.M = 1<<self._blocks['M'].nbits
+        self.UM = 1
+    
+    def is_qNaN(self):
+        return self.M&self.quiet_bit==1
+    
+    def is_inf(self) -> bool:
+        if self.E==self.mask_exp and self.M==0:
+            return True
+        else:
+            return False
+    
+    def is_inf(self) -> bool:
+        if self.E==self.mask_exp and self.M==0:
+            return True
+        else:
+            return False
+    
+    def is_nan(self) -> bool:
+        mask_exp = (1<<(self._blocks['E'].nbits+1))-1
+        if self.E==mask_exp and self.M!=0:
+            return True
+        else:
+            return False
+        
     def shift_mantissa(self, shmnt:int):
         if shmnt>0: 
             sticky = 1 if self[max(shmnt, shmnt-3):0]>0 else 0 # check if any 1 go after sticky bit 
@@ -225,86 +279,122 @@ class fpReg(BlockReg):
         return pretty_print_float(self, return_to_str=True)
     
 
-def FPU(op1, op2, f5:FP_OP_F5, op3=0, rnd=FP_ROUND_MODE.RNE, width=32):
+def FPU(op1, op2, f5:FP_OP_F5, rnd=FP_ROUND_MODE.RNE, width=32):
     
     # opf1 = BlockReg(32, op1, SF_block)
     # opf2 = BlockReg(32, op2, SF_block)
+    blk_dict = FP_blocks_op[width]
     
-    opf1 = to_op_fp_reg(op1, size = width)
-    opf2 = to_op_fp_reg(op2, size = width)
+    opf1 = to_op_fp_reg(op1, width = width)
+    opf2 = to_op_fp_reg(op2, width = width)
+    
+    opf1 = fpReg.from_op_reg(opf1)
+    opf2 = fpReg.from_op_reg(opf2)
     
     pretty_print_float(opf1, show_header=1)
-    print(f5)
+    pretty_print_float(opf2, show_header=0)
+    
+    # print("op1 inf?", opf1.is_inf())
+    # print("op2 inf?", opf2.is_inf())
+    
+    # print("op1 nan?", opf1.is_nan())
+    # print("op2 nan?", opf2.is_nan())
     exp_diff = opf1.E-opf2.E
     
-    if exp_diff>0:
-        opf2.FM = opf2.FM>>exp_diff
-        opf2.E+=exp_diff
-    elif exp_diff<0:
-        opf1.FM = opf1.FM>>abs(exp_diff)
-        opf1.E += abs(exp_diff)
+    if f5==FP_OP_F5.FADD or f5==FP_OP_F5.FSUB: 
+        if exp_diff>0:
+            opf2.FM = opf2.FM>>exp_diff
+            opf2.E+=exp_diff
+        elif exp_diff<0:
+            opf1.FM = opf1.FM>>abs(exp_diff)
+            opf1.E += abs(exp_diff)
     
-    opf3 = to_op_fp_reg(0, size=width)
-    
+    opf3 = to_op_fp_reg(0, width=width)
+    opf3 = fpReg.from_op_reg(opf3)
+    print(f"--- op --- {f5.name[1:]}")
+    # if f5==FP_OP_F5.FSUB:
+    #     if opf2.E not in [0, 255]: # if not inf of nan
+            
     if f5==FP_OP_F5.FADD:
         if opf1.S==opf2.S: # equal sign
-            opf3.S = opf1.S
-            opf3.E = opf1.E
-            opf3.FM = opf1.FM+opf2.FM
+            if opf2.is_inf() and opf1.is_inf():
+                opf3.to_Inf(neg=opf1.S)
+            else:
+                opf3.S = opf1.S
+                opf3.E = opf1.E
+                opf3.FM = opf1.FM+opf2.FM
         else:
-            opf3.S = opf1.S^opf2.S
-            opf3.E = opf1.E
-            opf3.FM = opf1.FM-opf2.FM
+            if opf2.is_inf() and opf1.is_inf():
+                opf3.to_NaN()
+            else:
+                opf3.S = opf1.S^opf2.S
+                opf3.E = opf1.E
+                opf3.FM = opf1.FM-opf2.FM
+                
     elif f5==FP_OP_F5.FSUB:
+        
         if opf1.S==opf2.S: # equal sign
-            opf3.S = opf1.S
-            opf3.E = opf1.E
-            opf3.FM = opf1.FM-opf2.FM
+            if opf2.is_inf() and opf1.is_inf():
+                opf3.to_NaN()
+            else:
+                opf3.S = opf1.S
+                opf3.E = opf1.E
+                opf3.FM = opf1.FM-opf2.FM
         else:
-            opf3.S = opf1.S^opf2.S
-            opf3.E = opf1.E
-            opf3.FM = opf1.FM+opf2.FM
+            if opf2.is_inf() and opf1.is_inf():
+                opf3.to_Inf(neg=(opf1.S&(~opf2.S)))
+            else:
+                opf3.S = opf1.S^opf2.S
+                opf3.E = opf1.E
+                opf3.FM = opf1.FM+opf2.FM
+            
+            
+    elif f5==FP_OP_F5.FMUL:
+        # print("fmul")
+        opf3.S = opf1.S^opf2.S
+        m_size = opf3._blocks['M'].nbits+2
+        mask = (1<<((m_size*2)))-1 # create a mask to double size of mantissa
+        new_m = (opf1.FM>>3)*(opf2.FM>>3) # remove GRS from multiplication
+  
+        size_FM = blk_dict['FM'][0]-blk_dict['FM'][1]
+        mult_norm_cond = (opf1.FM>>(size_FM-1)) and (opf2.FM>>(size_FM-1))
+
+        new_m = new_m & mask
+        
+        opf3.FM = new_m>>(m_size-3)
+        opf3.E = opf1.E+opf2.E-127+ (1 if mult_norm_cond else 0)
+
     else:
         print("No op")
         return 0
     pretty_print_float(opf3)
-    
+
     # normalize result
-    len_fm = opf3._blocks['FM'].nbits-1
-    mantissa_diff = find_msb(opf3.FM)-len_fm
-    if mantissa_diff>0:
-        opf3.FM = opf3.FM>>abs(mantissa_diff)
-        opf3.E+=abs(mantissa_diff)
-    elif mantissa_diff<0:
-        opf3.FM = opf3.FM<<abs(mantissa_diff)
-        opf3.E -= abs(mantissa_diff)
+    if opf3.UM and not opf3.is_inf() and not opf3.is_nan(): # else subnoamrl number
+        len_fm = opf3._blocks['FM'].nbits-1
+        mantissa_diff = find_msb(opf3.FM)-len_fm
+        if mantissa_diff>0:
+            opf3.FM = opf3.FM>>abs(mantissa_diff)
+            opf3.E+=abs(mantissa_diff)
+        elif mantissa_diff<0:
+            opf3.FM = opf3.FM<<abs(mantissa_diff)
+            opf3.E -= abs(mantissa_diff)
     
     # ROUNDING
     if rnd==FP_ROUND_MODE.RNE:
-        if opf3.GRS>0:
+        if opf3.GRS>(1<<2):
             opf3.M+=1
+            pretty_print_float(opf3)
     else:
         print("No Rounding")
     
-    pretty_print_float(opf3)
     
-    opf1 = to_op_fp_reg(op1, size = width)
-    opf2 = to_op_fp_reg(op2, size = width)
+    print("--- ==== ---")
+    opf1 = to_op_fp_reg(op1, width = width)
+    opf2 = to_op_fp_reg(op2, width = width)
     
     return pack_to_fp_reg(opf1), pack_to_fp_reg(opf2), pack_to_fp_reg(opf3)
 
-
-fp1 = fpReg(1234.0, 32)
-# fp1.M = 0b101
-print(fp1)
-# fp1.shift_mantissa(6)
-# print(fp1)
-# fp1.shift_mantissa(-1)
-# print(fp1)
-# fp1.shift_mantissa(1)
-# print(fp1)
-# fp1.shift_mantissa(1)
-# print(fp1)
 
 # TEST_FP_OP2_S( 2,  fadd.s, 0,                3.5,        2.5,        1.0 );
 # TEST_FP_OP2_S( 3,  fadd.s, 1,              -1234,    -1235.1,        1.1 );
@@ -318,20 +408,49 @@ print(fp1)
 # TEST_FP_OP2_S( 9,  fmul.s, 1,            1358.61,    -1235.1,       -1.1 );
 # TEST_FP_OP2_S(10,  fmul.s, 1,      3.14159265e-8, 3.14159265, 0.00000001 );
   
+# TEST_FP_OP2_S_HEX(11,  fsub.s, 0x10, qNaNf, Inff, Inff);
 # FPU(30.25, 4.2646728, F_OP_F5.FSUB, width=32)
+
+# res = FPU(2.5, 1.0, f5=FP_OP_F5.FMUL, width=32)
+# res = FPU(-1235.1, -1.1, f5=FP_OP_F5.FMUL, width=32)
+# res = FPU(3.14159265, 0.00000001, f5=FP_OP_F5.FMUL, width=32)
+
 
 # res = FPU(2.5, 1, FP_OP_F5.FADD, width=32)
 # res = FPU(-1235.1, 1.1, f5=FP_OP_F5.FADD, width=32)
 # res = FPU(3.14159265, 0.00000001, f5=FP_OP_F5.FADD, width=32)
 
-# res = FPU(2.5, 1, FP_OP_F5.FSUB, width=32)
+# res = FPU(2.5, 1.0, FP_OP_F5.FSUB, width=32)
 # res = FPU(-1235.1, -1.1, f5=FP_OP_F5.FSUB, width=32)
 # res = FPU(3.14159265, 0.00000001, f5=FP_OP_F5.FSUB, width=32)
 
-# try:
-#     print(hex(res[0].all), hex(res[1].all), "=", hex(res[2].all))
-# except:
-#     print("NULL")
+
+# Inf - (+Inf) -> NaN
+# res = FPU(0x7f800000, 0x7f800000, f5=FP_OP_F5.FSUB, width=32)
+# # Inf - (-Inf) -> +inf
+# res = FPU(0x7f800000, 0xff800000, f5=FP_OP_F5.FSUB, width=32)
+# # (-Inf) - (+Inf) -> -inf
+# res = FPU(0xff800000, 0x7f800000, f5=FP_OP_F5.FSUB, width=32)
+# # (-Inf) - (-Inf) -> NaN
+# res = FPU(0xff800000, 0xff800000, f5=FP_OP_F5.FSUB, width=32)
+
+# Inf + (+Inf) -> +Inf
+res = FPU(0x7f800000, 0x7f800000, f5=FP_OP_F5.FADD, width=32)
+# Inf + (-Inf) -> Nan
+res = FPU(0x7f800000, 0xff800000, f5=FP_OP_F5.FADD, width=32)
+# (-Inf) + (+Inf) -> Nan
+res = FPU(0xff800000, 0x7f800000, f5=FP_OP_F5.FADD, width=32)
+# (-Inf) + (-Inf) -> -Inf
+res = FPU(0xff800000, 0xff800000, f5=FP_OP_F5.FADD, width=32)
+
+
+
+try:
+    print(hex(res[0].all), hex(res[1].all), "=", hex(res[2].all))
+except:
+    print("NULL")
+
+# pretty_print_float(3.14159265e-8)
 # print(hex(pack_f32(1234.)))
 
 # print(to_f32(0xc49a6333))
