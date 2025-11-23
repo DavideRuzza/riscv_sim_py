@@ -63,6 +63,10 @@ COL = {
     # "bright_white": "\033[97m",
 }
 
+def full_bin(num, l=32):
+    bin_str = bin(num)[2:]
+    return '0'*(l-len(bin_str))+bin_str
+
 def get_symbol_info(elf_path, symbol_name):
     with open(elf_path, "rb") as f:
         elffile = ELFFile(f)

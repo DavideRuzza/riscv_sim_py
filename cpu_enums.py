@@ -35,16 +35,7 @@ class Ops(Enum):
     custom2     = 0b10_110_11
     custom3     = 0b11_110_11
 
-class FP_ROUND_MODE(Enum):
-    RNE = 0b000
-    RTZ = 0b001
-    RDN = 0b010
-    RUP = 0b011
-    RMM = 0b100
-    RES1 = 0b101
-    RES2 = 0b110
-    DYN = 0b111
-    
+
 class MISC_ALU_OP(Enum):
     SUB  = 0b0_00
     XOR  = 0b0_01
@@ -104,15 +95,54 @@ class OP_F3(Enum):
     OR = 0b110 
     AND = 0b111
 
+class FP_ROUND_MODE(Enum):
+    RNE = 0b000
+    RTZ = 0b001
+    RDN = 0b010
+    RUP = 0b011
+    RMM = 0b100
+    RES1 = 0b101
+    RES2 = 0b110
+    DYN = 0b111
+    
 class FP_OP_F5(Enum):
     FADD = 0b00000
     FSUB = 0b00001
     FMUL = 0b00010
     FDIV = 0b00011
     FSQRT = 0b01011
-    FSGN  = 0b01100
+    FSGN  = 0b00100
     FMINMAX = 0b00101
+    COMP = 0b10100
+    CVT_TO_FP = 0b11000
+    CVT_TO_INT = 0b11010
+
+class FP_MAXMIN_F3(Enum):
+    FMIN = 0b000
+    FMAX = 0b001
+
+class FP_CLASS(Enum):
+    negInf      = 1<<0
+    negNorNum   = 1<<1 # normal
+    negSubNum   = 1<<2 # subnormal
+    negZero     = 1<<3
+    posZero     = 1<<4
+    posSubNum   = 1<<5 # subnormal
+    posNorNum   = 1<<6 # normal
+    posInf      = 1<<7
+    sNan        = 1<<8
+    qNan        = 1<<9
     
+class FP_SGN_F3(Enum):
+    FSGNJ  = 0b000
+    FSGNJN = 0b001
+    FSGNJX = 0b010
+
+class FP_CVT_RS2(Enum):
+    W  = 0b00000
+    WU = 0b00001
+    L  = 0b00010
+    LU = 0b00011
     
 class OP_MUL_F3(Enum):
     MUL =  0b000

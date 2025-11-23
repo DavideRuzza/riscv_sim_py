@@ -6,6 +6,8 @@ from system_interface import SystemInterface
 from logger_config import setup_logging
 from pathlib import Path
 from typing import List, Dict, Tuple
+from FPU32 import FPU, pack_f32
+
 # from math import abs
 # # Max allowed repeats within recent jumps
 # MAX_JUMP_REPEAT = 20
@@ -165,7 +167,7 @@ class RV64Hart():
         self.ext_list : List[Ext] = [Ext.M]+extension_list
         
         self.regfile = RegFile(32, self.xlen, self.reg_names)
-        self.f_regfile = RegFile(32, self.xlen, self.f_reg_names)
+        self.fp_regfile = RegFile(32, self.xlen, self.f_reg_names)
         
         self.csr = CsrFile(self.ext_list)
         self.pc_rst = entry_point
@@ -541,6 +543,9 @@ class RV64Hart():
         r1 = self.regfile[ins.I_rs1]
         r2 = self.regfile[ins.I_rs2]
         
+        fpr1 = self.fp_regfile[ins.I_rs1]
+        fpr2 = self.fp_regfile[ins.I_rs2]
+        
         if not is_compressed:
             i_imm = sign_extend(ins[31:20], 12) & self.mask64
             s_imm = sign_extend(ins[31:25]<<5 | ins[11:7], 12) & self.mask64
@@ -623,7 +628,6 @@ class RV64Hart():
         elif op==Ops.LOAD_FP:
             addr = ( r1 + i_imm) & self.mask64   
             
-            
             # 010 (2) for W; 011 (3) for D; 100 (4) for Q; 
             size_byte = 1<<ins.I_f3
             # print(size_byte, ins.I_f3)
@@ -634,13 +638,19 @@ class RV64Hart():
             
             # return False
         elif op==Ops.OP_FP:
-            f_f5 = F_OP_F5(ins.I_f5)
+            f_f5 = FP_OP_F5(ins.I_f5)
+            f_f3 = ins.I_f3
+            res, fflags = FPU(fpr2, fpr1, f_f5)
             
-            if f_f5==F_OP_F5.FADD:
-                pass
-            else:
-                raise Exception(f"OP_FP not implemented {f_f3}")
-        
+            new_rd = pack_f32(res)
+            to_float_reg = True
+            self.write_back = True
+            
+            self.csr.fcsr.NV = fflags['NV']
+            self.csr.fcsr.DZ = fflags['DZ']
+            self.csr.fcsr.UF = fflags['UF']
+            self.csr.fcsr.OF = fflags['OF']
+            self.csr.fcsr.NX = fflags['NX']
          
         elif op==Ops.SYSTEM:
             if ins.I_f3 == 0:
@@ -723,7 +733,7 @@ class RV64Hart():
             log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
             
             if to_float_reg:
-                self.f_regfile[ins.I_rd] = new_rd
+                self.fp_regfile[ins.I_rd] = new_rd
             else:
                 self.regfile[ins.I_rd] = new_rd
             
