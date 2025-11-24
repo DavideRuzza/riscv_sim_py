@@ -157,63 +157,119 @@ def cvt_f32_to_int(
     fflags["NX"] = 0
 
     # ---------- Limits ----------
-    if rs2 in [FP_CVT_RS2.W, FP_CVT_RS2.W]:
+    if rs2 in [FP_CVT_RS2.W, FP_CVT_RS2.WU]:
         s_min, s_max = INT32_MIN, INT32_MAX
         u_max = UINT32_MAX
     else:  # 64-bit
         s_min, s_max = INT64_MIN, INT64_MAX
         u_max = UINT64_MAX
 
-    # ---------- NaN ----------
-    if math.isnan(f32):
-        fflags["NV"] = 1
-        return 0   # RISC-V says return 0
-
-
     # ---------- Signed conversion ----------
     if is_signed:
-
         if f32 < s_min:
             fflags["NV"] = 1
             return s_min
-
         if f32 > s_max:
             fflags["NV"] = 1
             return s_max
-
         return int(f32)
-
     # ---------- Unsigned conversion ----------
     else:
-
         if f32 < 0:
             fflags["NV"] = 1
             return 0
-
         if f32 > u_max:
             fflags["NV"] = 1
             return u_max
-
         return int(f32)
+    
+
+def cvt_int_to_f32(i_raw, is_signed, rs2, frm, fflags):
+    """
+    INT → FLOAT32 using only Python floats and your rounding function.
+    No bit manipulation.
+    """
+
+    # reset flags
+    fflags["NV"] = 0
+    fflags["DZ"] = 0
+    fflags["OF"] = 0
+    fflags["UF"] = 0
+    fflags["NX"] = 0
+
+    # -------------------------
+    # Interpret the integer
+    # -------------------------
+
+    # select width
+    if rs2 in (FP_CVT_RS2.W, FP_CVT_RS2.WU):
+        width = 32
+    else:
+        width = 64
+
+    mask = (1 << width) - 1
+    raw = i_raw & mask
+
+    if is_signed:
+        signbit = 1 << (width - 1)
+        if raw & signbit:
+            value = raw - (1 << width)   # sign-extend
+        else:
+            value = raw
+    else:
+        value = raw   # unsigned exact magnitude
+
+    # -------------------------
+    # Step 1: exact real value (float64)
+    # -------------------------
+    real = float(value)  # convert to double precision (perfect)
+
+    # -------------------------
+    # Step 2: apply rounding mode
+    # -------------------------
+    rounded = round_f32(real, frm)  # float32 with correct frm rounding
+
+    # -------------------------
+    # Step 3: detect inexact
+    # -------------------------
+    if float(rounded) != real:
+        fflags["NX"] = 1
+
+    # -------------------------
+    # Step 4: detect overflow
+    # -------------------------
+    if math.isfinite(real) and math.isinf(rounded):
+        fflags["OF"] = 1
+        fflags["NX"] = 1   # OF implies NX
+
+    # -------------------------
+    # Step 5: detect underflow
+    # -------------------------
+    F32_MIN_NORMAL = float.fromhex("0x1.0p-126")
+    if abs(float(rounded)) < F32_MIN_NORMAL and fflags["NX"]:
+        fflags["UF"] = 1
+
+    return np.float32(rounded)
+    
 
    
 def FPU(
-    a_f32: Union[float, int], 
-    b_f32: Union[float, int], 
+    a_f32: Union[float, int, str], 
+    b_f32: Union[float, int, str], 
     f5:FP_OP_F5, 
     f3:int, 
-    rs2:int,      
+    rs2:int,    
     **kwargs
     ):
     
     # Cast input to python float64
-    if type(a_f32)==int:
-        a_f32 = to_f32(a_f32)
-    if type(b_f32)==int:
-        b_f32 = to_f32(b_f32)
+    if type(a_f32)==str:
+        a_f32 = unpack('>f', bytearray.fromhex(a_f32.lstrip('0x')))[0]
+    if type(b_f32)==str:
+        b_f32 = unpack('>f', bytearray.fromhex(b_f32.lstrip('0x')))[0]
     a = float(a_f32)
     b = float(b_f32)
-
+    
     # ----------------------
     # fflags
     # ----------------------
@@ -257,17 +313,22 @@ def FPU(
         return a, fflags
         # src2_sign = pack_f32(b)
         
+    elif f5 == FP_OP_F5.CVT_TO_FP:
+        rs2 = FP_CVT_RS2(rs2)
+        signed = rs2 in [FP_CVT_RS2.W, FP_CVT_RS2.L]
+        is32 = rs2 in [FP_CVT_RS2.W, FP_CVT_RS2.WU]
         
+        real = cvt_int_to_f32(a_f32, signed, rs2, FP_ROUND_MODE(f3), fflags)
+        
+        return real, fflags
     
     elif f5 == FP_OP_F5.CVT_TO_INT:
         
         rs2 = FP_CVT_RS2(rs2)
         signed = rs2 in [FP_CVT_RS2.W, FP_CVT_RS2.L]
-        # print("float", a)
         is32 = rs2 in [FP_CVT_RS2.W, FP_CVT_RS2.WU]
         if math.isnan(a):
             MAXB = 32 if is32 else 64
-            
             if signed:
                 integer=(1<<(MAXB-1))-1
             else:
@@ -443,6 +504,17 @@ def FPU(
 
 print(res[0], res[1], f"{res[0]:016x}")"""
 
-res = FPU( -math.nan, -0.0, FP_OP_F5.FSGNJ, FP_SGNJ_F3.J, 0)
+# res = FPU( 0, 0, FP_OP_F5.FSGNJ, FP_SGNJ_F3.J, 0)
+# print(res[0], res[1], f"{res[0]:08x}")
 
-print(res[0], res[1], f"{res[0]:08x}")
+res = FPU(2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.W)
+res = FPU(-2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.W)
+res = FPU(2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.WU)
+res = FPU(-2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.WU)
+
+res = FPU(2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.L)
+res = FPU(-2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.L)
+res = FPU(2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.LU)
+res = FPU(-2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.LU)
+
+print(res[0], res[1])
