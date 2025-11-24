@@ -111,7 +111,7 @@ class FP_OP_F5(Enum):
     FMUL = 0b00010
     FDIV = 0b00011
     FSQRT = 0b01011
-    FSGN  = 0b00100
+    FSGNJ = 0b00100
     FMINMAX = 0b00101
     COMP = 0b10100
     CVT_TO_FP = 0b11000
@@ -133,10 +133,10 @@ class FP_CLASS(Enum):
     sNan        = 1<<8
     qNan        = 1<<9
     
-class FP_SGN_F3(Enum):
-    FSGNJ  = 0b000
-    FSGNJN = 0b001
-    FSGNJX = 0b010
+class FP_SGNJ_F3(Enum):
+    J  = 0b000
+    JN = 0b001
+    JX = 0b010
 
 class FP_CVT_RS2(Enum):
     W  = 0b00000
