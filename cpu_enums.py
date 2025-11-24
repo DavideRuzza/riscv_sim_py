@@ -113,10 +113,17 @@ class FP_OP_F5(Enum):
     FSQRT = 0b01011
     FSGNJ = 0b00100
     FMINMAX = 0b00101
-    COMP = 0b10100
+    FCMP = 0b10100
     CVT_TO_FP = 0b11000
     CVT_TO_INT = 0b11010
+    FMVT_X_W = 0b11100
+    FMVT_W_X = 0b11110
 
+class FP_CMP_F3(Enum):
+    EQ = 0b010
+    LT = 0b001
+    LE = 0b000
+    
 class FP_MAXMIN_F3(Enum):
     FMIN = 0b000
     FMAX = 0b001
