@@ -63,6 +63,10 @@ UINT32_MAX = 2**32 - 1
 INT64_MIN = -2**63
 INT64_MAX =  2**63 - 1
 UINT64_MAX = 2**64 - 1
+sNAN = 0x7f80_0001
+qNAN = 0x7fff_ffff
+nZero = 0x8000_0000
+pZero = 0x0000_0000
 
 
 def round_f32(real, frm: FP_ROUND_MODE):
@@ -146,8 +150,12 @@ def is_sNan(flt):
 
     return quiet_bit==0
 
-def fp_sign_pos(fp):
+def fp_pos(fp):
     return (pack_f32(fp)>>31)==0
+
+def fp_neg(fp):
+    return (pack_f32(fp)>>31)==1
+
 
 def is_subnormal(fp):
     return ((pack_f32(fp) >> 23) & 0xFF) == 0
@@ -334,15 +342,57 @@ def FPU(
         
         return a, fflags
     
+    elif f5==FP_OP_F5.FMINMAX:
+        f3 = FP_MINMAX_F3(f3)
+        
+        
+        if math.isnan(a) and math.isnan(b):
+            real = math.nan
+            fflags['NV'] = 1
+        elif math.isnan(a) and not math.isnan(b):
+            real = b
+            fflags['NV'] = 1
+        elif not math.isnan(a) and math.isnan(b):
+            real = a
+            fflags['NV'] = 1
+        else:
+            if f3==FP_MINMAX_F3.FMIN:
+                if a==0 and b==0:
+                    if fp_pos(a) and fp_neg(b):
+                        real = b
+                    elif fp_neg(a) and fp_pos(b):
+                        real = a
+                    else:
+                        real = a # either is equal
+                else:
+                    if a>b:
+                        real = b
+                    else:
+                        real = a
+            elif f3==FP_MINMAX_F3.FMAX:
+                if a==0 and b==0:
+                    if fp_pos(a) and fp_neg(b):
+                        real = a
+                    elif fp_neg(a) and fp_pos(b):
+                        real = b
+                    else:
+                        real = a # either is equal
+                else:
+                    if a>b:
+                        real = a
+                    else:
+                        real = b
+        return real, fflags
+                                       
     elif f5 == FP_OP_F5.FCLASS and f3==1: # fclass op
         class_res = 0
         if math.isinf(a):
-            if fp_sign_pos(a):
+            if fp_pos(a):
                 class_res = FP_CLASS.posInf
             else:
                 class_res = FP_CLASS.negInf
         elif a==0:
-            if fp_sign_pos(a):
+            if fp_pos(a):
                 class_res = FP_CLASS.posZero
             else:
                 class_res = FP_CLASS.negZero
@@ -352,12 +402,12 @@ def FPU(
             else:
                 class_res = FP_CLASS.qNan
         elif is_subnormal(a):
-            if fp_sign_pos(a):
+            if fp_pos(a):
                 class_res = FP_CLASS.posSubNum
             else:
                 class_res = FP_CLASS.negSubNum
         else:
-            if fp_sign_pos(a):
+            if fp_pos(a):
                 class_res = FP_CLASS.posNorNum
             else:
                 class_res = FP_CLASS.negNorNum
@@ -635,4 +685,30 @@ res = FPU(0x7f800001, 0, FP_OP_F5.FCLASS, 1, 0)
 res = FPU(0x7fffffff, 0, FP_OP_F5.FCLASS, 1, 0)
 
 print(res[0], res[1])
+
+res = FPU(1.0, 2.5, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)
+res = FPU(1.1, -1235.1, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)
+res = FPU(-1235.1, 1.1, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)
+res = FPU(-1235.1, np.nan, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)
+res = FPU(0.00000001, 3.14159265, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)
+res = FPU(-2.0, -1.0, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)
+
+res = FPU(1.0, 2.5, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(1.1, -1235.1, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(-1235.1, 1.1, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(-1235.1, np.nan, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(0.00000001, 3.14159265, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(-2.0, -1.0, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+
+res = FPU(0x3f800000, sNAN, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(sNAN, sNAN, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+
+
+res = FPU(nZero, pZero, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)
+res = FPU(pZero, nZero, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)
+
+res = FPU(nZero, pZero, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(pZero, nZero, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+print(res[0], f"{pack_f32(res[0]):08x}", res[1])
+
 """

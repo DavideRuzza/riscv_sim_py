@@ -125,7 +125,7 @@ class FP_CMP_F3(Enum):
     LT = 0b001
     LE = 0b000
     
-class FP_MAXMIN_F3(Enum):
+class FP_MINMAX_F3(Enum):
     FMIN = 0b000
     FMAX = 0b001
 
