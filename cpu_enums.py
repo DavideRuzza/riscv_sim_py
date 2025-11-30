@@ -117,6 +117,7 @@ class FP_OP_F5(Enum):
     CVT_TO_FP = 0b11000
     CVT_TO_INT = 0b11010
     FMVT_X_W = 0b11100
+    FCLASS = 0b11100
     FMVT_W_X = 0b11110
 
 class FP_CMP_F3(Enum):

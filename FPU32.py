@@ -56,6 +56,13 @@ def pack_fp(in_f:float, width=32):
         return 0
 
 CANONICAL_QNAN = 0x7FC00000  # RISC-V canonical quiet NaN
+INT32_MIN = -2**31
+INT32_MAX =  2**31 - 1
+UINT32_MAX = 2**32 - 1
+
+INT64_MIN = -2**63
+INT64_MAX =  2**63 - 1
+UINT64_MAX = 2**64 - 1
 
 
 def round_f32(real, frm: FP_ROUND_MODE):
@@ -127,7 +134,6 @@ def round_f32(real, frm: FP_ROUND_MODE):
     # otherwise: illegal rounding mode
     return nearest
 
-
 def is_sNan(flt):
     exponent = (flt >> 23) & 0xFF
     fraction = flt & 0x7FFFFF  # 23 bits
@@ -140,13 +146,11 @@ def is_sNan(flt):
 
     return quiet_bit==0
 
-INT32_MIN = -2**31
-INT32_MAX =  2**31 - 1
-UINT32_MAX = 2**32 - 1
+def fp_sign_pos(fp):
+    return (pack_f32(fp)>>31)==0
 
-INT64_MIN = -2**63
-INT64_MAX =  2**63 - 1
-UINT64_MAX = 2**64 - 1
+def is_subnormal(fp):
+    return ((pack_f32(fp) >> 23) & 0xFF) == 0
 
 
 def cvt_f32_to_int(
@@ -329,6 +333,35 @@ def FPU(
             print("FSGNJ-boh")
         
         return a, fflags
+    
+    elif f5 == FP_OP_F5.FCLASS and f3==1: # fclass op
+        class_res = 0
+        if math.isinf(a):
+            if fp_sign_pos(a):
+                class_res = FP_CLASS.posInf
+            else:
+                class_res = FP_CLASS.negInf
+        elif a==0:
+            if fp_sign_pos(a):
+                class_res = FP_CLASS.posZero
+            else:
+                class_res = FP_CLASS.negZero
+        elif math.isnan(a):
+            if is_sNan(a_i32):
+                class_res = FP_CLASS.sNan
+            else:
+                class_res = FP_CLASS.qNan
+        elif is_subnormal(a):
+            if fp_sign_pos(a):
+                class_res = FP_CLASS.posSubNum
+            else:
+                class_res = FP_CLASS.negSubNum
+        else:
+            if fp_sign_pos(a):
+                class_res = FP_CLASS.posNorNum
+            else:
+                class_res = FP_CLASS.negNorNum
+        return class_res, fflags
     
     elif f5 == FP_OP_F5.FCMP:
         
@@ -585,9 +618,21 @@ res = FPU(0x7f800000, 0x7f800000, f5=FP_OP_F5.FSUB, f3=0, rs2=0)
 # print(res[0], res[1])
 
 # res = FPU(0x7fff_ffff, 0, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
-# print(res[0], res[1])
+# print(res[0], res[1]) # qNan
 # res = FPU(0x7fff_ffff, 0x7fff_ffff, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
-# print(res[0], res[1])
+# print(res[0], res[1]) # sNan
 # res = FPU(0x7f80_0001, 0.0, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
 # print(res[0], res[1])
+
+res = FPU(-np.inf, 0, FP_OP_F5.FCLASS, 1, 0)
+res = FPU(0xbf800000, 0, FP_OP_F5.FCLASS, 1, 0)
+res = FPU(0x807fffff, 0, FP_OP_F5.FCLASS, 1, 0)
+res = FPU(0x80000000, 0, FP_OP_F5.FCLASS, 1, 0)
+res = FPU(0x00000000, 0, FP_OP_F5.FCLASS, 1, 0)
+res = FPU(0x007fffff, 0, FP_OP_F5.FCLASS, 1, 0)
+res = FPU(0x3f800000, 0, FP_OP_F5.FCLASS, 1, 0)
+res = FPU(0x7f800001, 0, FP_OP_F5.FCLASS, 1, 0)
+res = FPU(0x7fffffff, 0, FP_OP_F5.FCLASS, 1, 0)
+
+print(res[0], res[1])
 """
