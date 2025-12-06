@@ -396,7 +396,7 @@ class CsrReg():
                 
                 # then write all the blocks separately
                 for name, bits in self._blk_bit_map.items():
-                    print(name, bits)
+                    # print(name, bits)
                     # sub_blk = self._blocks[attr]
                     if name in self.blk_wpri:
                         continue
@@ -484,7 +484,7 @@ class CsrReg():
 class CsrFile():
     # TODO: implement attr get and set and log print on read. write is done
 
-    def __init__(self, ext_list: List[Ext]):     
+    def __init__(self, ext_list: List[Ext]=None):     
         
         self.ext_list = ext_list 
         self.csr_map : Dict[int, CsrReg] = {}

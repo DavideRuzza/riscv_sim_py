@@ -6,18 +6,18 @@ class Ops(Enum):
     ILLEGAL     = 0b00_000_00
     LOAD        = 0b00_000_11
     STORE       = 0b01_000_11
-    MADD        = 0b10_000_11
+    FMADD       = 0b10_000_11
     BRANCH      = 0b11_000_11
     LOAD_FP     = 0b00_001_11
     STORE_FP    = 0b01_001_11
-    MSUB        = 0b10_001_11
+    FMSUB       = 0b10_001_11
     JALR        = 0b11_001_11
     custom0     = 0b00_010_11
     custom1     = 0b01_010_11
-    MNSUB       = 0b10_010_11
+    FMNSUB      = 0b10_010_11
     MISC_MEM    = 0b00_011_11
     AMO         = 0b01_011_11
-    NMADD       = 0b10_011_11
+    FNMADD      = 0b10_011_11
     JAL         = 0b11_011_11
     
     OP_IMM      = 0b00_100_11
@@ -367,16 +367,15 @@ CSR_M = {
                     "WRPI_0":[0], "WRPI_1":[4, 2], "WRPI_2":[8,6],
                     "WRPI_3":[12, 10], "WRPI_4":[63,14],
                 }, 'mip'),
-# }
 
-# CSR_U = {
     "cycle":    (0xc00, 64, {}, {}, "mcycle"), 
     "instret":  (0xc02, 64, {}, {}, "minstret"), 
     
     
     "fcsr":     (0x003, 32, {
                     "FRM": [7,5], "NV":[4], "DZ":[3],
-                    "OF":[2], "UF":[1], "NX":[0]
+                    "OF":[2], "UF":[1], "NX":[0],
+                    "FFL": [4,0],
                 }, {
                     #"WPRI_0": [31, 8]
                 }, None),
@@ -394,123 +393,3 @@ CSR_M = {
                     #"WPRI_0": [31, 5]
                 }, 'fcsr'),
 }
- 
-# CSR_U = {
-#     0x000: "ustatus",
-#     0x004: "uie",
-#     0x005: "utvec",
-#     0x040: "uscratch",
-#     0x041: "uepc",
-#     0x042: "ucause",
-#     0x043: "utval",
-#     0x044: "uip"
-# }
-
-# CSR_S = {
-#     0x100: "sstatus",
-#     0x102: "sedeleg",
-#     0x103: "sideleg",
-#     0x104: "sie",
-#     0x105: "stvec",
-#     0x106: "scounteren",
-#     0x140: "sscratch",
-#     0x141: "sepc",
-#     0x142: "scause",
-#     0x143: "stval",
-#     0x144: "sip",
-#     0x180: "satp",
-#     0xDA0: "scountovf",
-#     0x5A8: "scontext"
-# }
-
-# CSR_H = {
-#     0x200: "vsstatus",
-#     0x204: "vsie",
-#     0x205: "vstvec",
-#     0x240: "vsscratch",
-#     0x241: "vsepc",
-#     0x242: "vscause",
-#     0x243: "vstval",
-#     0x244: "vsip",
-#     0x280: "vsatp",
-
-#     0x600: "hstatus",
-#     0x602: "hedeleg",
-#     0x603: "hideleg",
-#     0x604: "hie",
-#     0x605: "htvec",
-#     0x640: "hscratch",
-#     0x641: "hepc",
-#     0x642: "hcause",
-#     0x643: "htval",
-#     0x644: "hip",
-#     0x645: "hvip",
-#     0x646: "htinst",
-#     0x64A: "henvcfg",
-#     0x64B: "henvcfgh",  # RV32 only
-#     0x680: "hgatp"
-# }
-
-# CSR_M = {
-#     0xF11: "mvendorid",
-#     0xF12: "marchid",
-#     0xF13: "mimpid",
-#     0xF14: "mhartid",
-#     # 0xF14: "mconfigptr",
-    
-#     0x300: "mstatus",
-#     0x301: "misa",
-#     0x302: "medeleg",
-#     0x303: "mideleg",
-#     0x304: "mie",
-#     0x305: "mtvec",
-#     # 0x306: "mcounteren",
-#     # 0x310: "mstatush",   # RV32 only
-#     # 0x312: "mdelegh",   # RV32 only
-    
-#     0x340: "mscratch",
-#     0x341: "mepc",
-#     0x342: "mcause",
-#     0x343: "mtval",
-#     0x344: "mip",
-#     # 0x345: "mtinst",
-#     # 0x346: "mtval2",
-    
-#     # 0x3A0: "menvcfg",
-#     # 0x3A1: "menvcfgh",     # RV32 only
-#     # 0x747: "mseccfg",
-#     # 0x757: "mseccfgh",     # RV32 only
-# }
-
-
-# CSR_DEBUG = {
-#     0x7A0: "tselect",
-#     0x7A1: "tdata1",
-#     0x7A2: "tdata2",
-#     0x7A3: "tdata3",
-#     0x7B0: "dcsr",
-#     0x7B1: "dpc",
-#     0x7B2: "dscratch0",
-#     0x7B3: "dscratch1"
-# }
-
-
-# # performance Counters / Timer 
-# CSR_CTR_TMR = {
-#     0xC00: "cycle",
-#     0xC01: "time",
-#     0xC02: "instret",
-#     **{0xC03 + i: f"hpmcounter{i+3}" for i in range(29)},   # 0xC03 - 0xC1F
-
-#     0xC80: "cycleh",       # RV32 only
-#     0xC81: "timeh",        # RV32 only
-#     0xC82: "instreth",     # RV32 only
-#     **{0xC83 + i: f"hpmcounter{i+3}h" for i in range(29)}   # 0xC83 - 0xC9F (RV32 only)
-# }
-
-
-# CSR_F = {
-#     0x001: "fflags",
-#     0x002: "frm",
-#     0x003: "fcsr"
-# }

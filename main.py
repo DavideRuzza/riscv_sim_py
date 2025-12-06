@@ -6,7 +6,7 @@ from system_interface import SystemInterface
 from logger_config import setup_logging
 from pathlib import Path
 from typing import List, Dict, Tuple
-from FPU32 import FPU, pack_f32
+from FPU32 import FPU, pack_f32, pack_fflags, def_fflags
 
 # from math import abs
 # # Max allowed repeats within recent jumps
@@ -148,7 +148,14 @@ class RV64Hart():
     's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10', 's11', 
     't3', 't4', 't5', 't6']
     
-    f_reg_names=['f'+str(i) for i in range(32)]
+    fp_reg_names=[
+        'ft0', 'ft1', 'ft2', 'ft3', 'ft4', 'ft5', 'ft6', 'ft7',
+        'fs0', 'fs1', 
+        'fa0', 'fa1', 'fa2', 'fa3', 'fa4', 'fa5', 'fa6', 'fa7',
+        'fs2', 'fs3', 'fs4', 'fs5', 'fs6', 'fs7', 'fs8', 'fs9', 'fs10', 'fs11',
+        'ft8', 'ft9', 'ft10', 'ft11'
+    ]
+    
 
     def __init__(self, 
             hartid, 
@@ -167,7 +174,7 @@ class RV64Hart():
         self.ext_list : List[Ext] = [Ext.M]+extension_list
         
         self.regfile = RegFile(32, self.xlen, self.reg_names)
-        self.fp_regfile = RegFile(32, self.xlen, self.f_reg_names)
+        self.fp_regfile = RegFile(32, self.xlen, self.fp_reg_names)
         
         self.csr = CsrFile(self.ext_list)
         self.pc_rst = entry_point
@@ -182,9 +189,10 @@ class RV64Hart():
         self.new_pc = 0
         self.write_back = False
         self.write_csr = False
+        self.to_float_reg = False
         self.inst_ret = True
         self.cnt_cycle = True
-        self.breakpoint_addr = 0 #0x8000_0218
+        self.breakpoint_addr = 0# 0x8000_01fc
         
         # ------------- SETUP CSR
         self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
@@ -307,13 +315,14 @@ class RV64Hart():
         self.new_pc = pc_plus_4
         
         new_rd = 0
-        to_float_reg = False
+        self.to_float_reg = False
         
         csr_key = 0
         new_csr = 0
         
         self.write_back = False
         self.write_csr = False
+        
         
         self.inst_ret = True
         self.cnt_cycle = True
@@ -627,30 +636,48 @@ class RV64Hart():
                     new_rd = sign_extend(new_rd, size_byte*8)
         elif op==Ops.LOAD_FP:
             addr = ( r1 + i_imm) & self.mask64   
-            
             # 010 (2) for W; 011 (3) for D; 100 (4) for Q; 
             size_byte = 1<<ins.I_f3
-            # print(size_byte, ins.I_f3)
-            
             new_rd = self.sys_bus.read(addr, size_byte)
-            to_float_reg = True
+            self.to_float_reg = True
             self.write_back = True
-            
-            # return False
+        elif op==Ops.STORE_FP:
+            addr = ( r1 + s_imm) & self.mask64  
+            if (addr == self.to_host_addr):
+                log.error("__to_host__")
+                return False
+            self.sys_bus.write(addr, fpr2, 1<<ins.I_f3)  
         elif op==Ops.OP_FP:
             f_f5 = FP_OP_F5(ins.I_f5)
             f_f3 = ins.I_f3
-            res, fflags = FPU(fpr2, fpr1, f_f5)
             
-            new_rd = pack_f32(res)
-            to_float_reg = True
+            # print(f_f5, f_f3)
+            if f_f5 == FP_OP_F5.FMVT_X_W and f_f3==0:
+                new_rd = fpr1
+                fflags = self.csr.fcsr.FFL
+            elif f_f5 in [FP_OP_F5.FSGNJ, FP_OP_F5.FMINMAX, FP_OP_F5.FADD, FP_OP_F5.FSUB, FP_OP_F5.FMUL, FP_OP_F5.FDIV, FP_OP_F5.FSQRT]:
+                res, fflags = FPU(fpr1, fpr2, f_f5, f_f3, ins.I_rs2)
+                self.to_float_reg = True
+                new_rd = pack_f32(res)
+                
+            elif f_f5 in [FP_OP_F5.CVT_TO_FP]:
+                res, fflags = FPU(r1, 0.0, f_f5, f_f3, ins.I_rs2)
+                self.to_float_reg = True
+                new_rd = pack_f32(res)
+            
+            elif f_f5 in [FP_OP_F5.FCLASS, FP_OP_F5.FCMP, FP_OP_F5.CVT_TO_INT]:
+                res, fflags = FPU(fpr1, fpr2, f_f5, f_f3, ins.I_rs2)
+                new_rd = res&self.mask64
+            else:
+                raise Exception(f"Unknown operation {f_f5}")  
+            
+            if type(fflags)==dict:
+                fflags = pack_fflags(fflags)
+            
+            new_rd = sign_extend(new_rd, 32)&self.mask64
             self.write_back = True
             
-            self.csr.fcsr.NV = fflags['NV']
-            self.csr.fcsr.DZ = fflags['DZ']
-            self.csr.fcsr.UF = fflags['UF']
-            self.csr.fcsr.OF = fflags['OF']
-            self.csr.fcsr.NX = fflags['NX']
+            self.csr.fcsr.FFL = fflags
          
         elif op==Ops.SYSTEM:
             if ins.I_f3 == 0:
@@ -730,11 +757,12 @@ class RV64Hart():
         self.handleException()
 
         if self.write_back:
-            log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
             
-            if to_float_reg:
+            if self.to_float_reg:
+                log.info(f"write reg - f{self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
                 self.fp_regfile[ins.I_rd] = new_rd
             else:
+                log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
                 self.regfile[ins.I_rd] = new_rd
             
             # print(hex(self.csr['mtvec'][1:0]))
@@ -760,6 +788,7 @@ class RV64Hart():
 RISCV_TEST = 1
 DEBUG = 1
 FREERUN = 1
+
 
 if DEBUG:
     setup_logging(logging.DEBUG)
@@ -821,6 +850,22 @@ for test in tests:
                                 print(f"No reg named {cmd[1]}\n")
                     else:
                         print(h0.regfile)
+                        
+                elif cmd[0]=="freg":
+                    if len(cmd)>1:
+                        if cmd[1].isnumeric():
+                            if int(cmd[1])<32:
+                                reg_name = h0.fp_reg_names[int(cmd[1])]
+                                print(f"{reg_name}: {h0.fp_regfile[int(cmd[1])]:016x}\n")
+                            else:
+                                print(f"No reg x{cmd[1]}\n")
+                        else:
+                            if cmd[1] in h0.fp_reg_names:
+                                print(f"{cmd[1]}: 0x{h0.fp_regfile[h0.fp_reg_names.index(cmd[1])]:016x}\n")
+                            else:
+                                print(f"No reg named {cmd[1]}\n")
+                    else:
+                        print(h0.fp_regfile)
                 elif cmd[0]=="":
                     break
                 elif cmd[0]=="br":
@@ -842,6 +887,11 @@ for test in tests:
         print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ")
     
     del h0
+
+
+# csr = CsrFile()
+# csr.fcsr.FFL=1
+# print(csr) 
 
 # csr = CsrFile([Ext.M])
 # csr.mstatus.update_warl_blk("MPP", [1, 2, 3])

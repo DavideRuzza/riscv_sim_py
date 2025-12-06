@@ -160,7 +160,6 @@ def fp_neg(fp):
 def is_subnormal(fp):
     return ((pack_f32(fp) >> 23) & 0xFF) == 0
 
-
 def cvt_f32_to_int(
         f32, 
         is_signed, 
@@ -200,7 +199,10 @@ def cvt_f32_to_int(
     # ---------- Unsigned conversion ----------
     else:
         if f32 < 0:
-            fflags["NV"] = 1
+            if int(f32)==0: # special case
+                fflags["NX"] = 1
+            else:
+                fflags["NV"] = 1
             return 0
         if f32 > u_max:
             fflags["NV"] = 1
@@ -273,7 +275,23 @@ def cvt_int_to_f32(i_raw, is_signed, rs2, frm, fflags):
         fflags["UF"] = 1
 
     return np.float32(rounded)
+  
+
+def pack_fflags(fflags:dict):
+    ff = fflags['NX']
+    ff |= fflags['UF']<<1
+    ff |= fflags['OF']<<2
+    ff |= fflags['DZ']<<3
+    ff |= fflags['NV']<<4
+    return ff
     
+def_fflags = {
+        "NV": 0, # Invalid operations
+        "DZ": 0, # Division by zero
+        "OF": 0, # Overflow
+        "UF": 0, # Underflow
+        "NX": 0, # Inexact
+    }  
 
 def FPU(
     a_f32: Union[float, int], 
@@ -290,16 +308,25 @@ def FPU(
     
     a_sNan = 0 
     b_sNan = 0 
-    # Cast input to python float64
+    
     if type(a_f32)==int:
         a_sNan = is_sNan(a_f32) 
-        a_f32 = to_f32(a_f32) # unpack('>f', bytearray.fromhex(a_f32.lstrip('0x')))[0]
+        a_f32 = to_f32(a_f32)
+    else:
+        # If it's a Python float, convert to float32 first!
+        a_f32 = np.float32(a_f32)
+
     if type(b_f32)==int:
         b_sNan = is_sNan(b_f32)
-        b_f32 = to_f32(b_f32) # unpack('>f', bytearray.fromhex(b_f32.lstrip('0x')))[0]
+        b_f32 = to_f32(b_f32)
+    else:
+        # If it's a Python float, convert to float32 first!
+        b_f32 = np.float32(b_f32)
+
+    # Now convert to float64 for computation
     a = float(a_f32)
     b = float(b_f32)
-    
+
     # ----------------------
     # fflags
     # ----------------------
@@ -314,7 +341,7 @@ def FPU(
     # ----------------------
     # Perform real operation
     # ----------------------
-    if f5 == FP_OP_F5.FSGNJ:
+    if f5 == FP_OP_F5.FSGNJ: # -> return fp
         
         f3 = FP_SGNJ_F3(f3)
         zero_sign_mask = (1<<31)-1
@@ -342,7 +369,7 @@ def FPU(
         
         return a, fflags
     
-    elif f5==FP_OP_F5.FMINMAX:
+    elif f5==FP_OP_F5.FMINMAX:  # -> return fp
         f3 = FP_MINMAX_F3(f3)
         
         
@@ -384,7 +411,7 @@ def FPU(
                         real = b
         return real, fflags
                                        
-    elif f5 == FP_OP_F5.FCLASS and f3==1: # fclass op
+    elif f5 == FP_OP_F5.FCLASS and f3==1:
         class_res = 0
         if math.isinf(a):
             if fp_pos(a):
@@ -431,7 +458,8 @@ def FPU(
             cond = 1 if a_f32<=b_f32 else 0
             
         if (math.isnan(a_f32) and not a_sNan) or \
-            (math.isnan(b_f32) and not b_sNan):
+            (math.isnan(b_f32) and not b_sNan) or \
+            (math.isnan(a_f32) or math.isnan(b_f32)):
             if f3 in [FP_CMP_F3.LT, FP_CMP_F3.LE]:
                 fflags['NV'] = 1
                 return 0, fflags
@@ -439,7 +467,7 @@ def FPU(
         
         return cond, fflags
 
-    elif f5 == FP_OP_F5.CVT_TO_FP:
+    elif f5 == FP_OP_F5.CVT_TO_FP:  # -> return fp
         rs2 = FP_CVT_RS2(rs2)
         signed = rs2 in [FP_CVT_RS2.W, FP_CVT_RS2.L]
         is32 = rs2 in [FP_CVT_RS2.W, FP_CVT_RS2.WU]
@@ -459,17 +487,28 @@ def FPU(
                 integer=(1<<(MAXB-1))-1
             else:
                 integer=(1<<MAXB)-1
+            fflags['NV'] = 1
         else:
             integer = cvt_f32_to_int(a, signed, rs2, fflags)
+            
         # print("integer", integer)
         if is32:
+            print(integer, a)
+            if float(integer)!=float(a) and fflags['NV']!=1:
+                fflags['NX'] = 1
             return sign_extend(integer&0xffff_ffff, 32)&0xffff_ffff_ffff_ffff, fflags
         else:
+            if float(integer)!=float(a) and fflags['NV']!=1:
+                fflags['NX'] = 1
             return integer&0xffff_ffff_ffff_ffff, fflags
     
     elif f5 in [FP_OP_F5.FADD, FP_OP_F5.FSUB, FP_OP_F5.FMUL, FP_OP_F5.FDIV, FP_OP_F5.FSQRT]:
+        # Track if this is an invalid operation from the start
+        invalid_op = False
+        
         if math.isnan(a) or math.isnan(b):
             real = math.nan
+            invalid_op = True
         else:
             if f5 == FP_OP_F5.FADD:
                 real = a + b
@@ -479,34 +518,43 @@ def FPU(
                 real = a * b
             elif f5 == FP_OP_F5.FDIV:
                 if b == 0.0 and a != 0.0:
-                    real=math.nan
+                    real = math.nan
                     fflags['DZ'] = 1
                 else:
                     real = a / b
             elif f5 == FP_OP_F5.FSQRT:
-                if a>=0:
+                if a >= 0:
                     real = math.sqrt(a)
                 else:
                     real = math.nan
+                    invalid_op = True
             else:
                 raise ValueError("unknown f5")
+
+        # Check for invalid operations that produce NaN
+        # Inf - Inf, Inf + (-Inf), 0 * Inf, Inf / Inf, 0 / 0, sqrt(negative)
+        if math.isnan(real) and not invalid_op:
+            invalid_op = True
 
         # ----------------------
         # Convert result to float32 (FPU final result)
         # ----------------------
         f32 = round_f32(real, FP_ROUND_MODE(f3))
 
-        # NV: invalid operations → real is NaN
-        if math.isnan(real):
+        # NV: invalid operations → result is NaN from invalid operation
+        if invalid_op:
             fflags['NV'] = 1
                 
-        # NX: inexact
-        if f32 != real:
-            fflags['NX'] = 1
+        # NX: inexact - only check if NOT an invalid operation
+        # Invalid operations don't set inexact flag
+        if not invalid_op and not math.isnan(real):
+            if float(f32) != real:
+                fflags['NX'] = 1
 
         # OF: overflow → final result is inf, but real was finite
         if math.isfinite(real) and math.isinf(f32):
             fflags['OF'] = 1
+            fflags['NX'] = 1  # Overflow implies inexact
 
         # UF: underflow → tiny + inexact
         F32_MIN_NORMAL = float.fromhex("0x1.0p-126")
@@ -515,37 +563,217 @@ def FPU(
 
         return f32, fflags
     
-        
 """
+# ------------------------------------------------------------------------- fadd.S
+
+# res = FPU(2.5, 1.0, FP_OP_F5.FADD, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+# res = FPU(-1235.1, 1.1, f5=FP_OP_F5.FADD, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+# res = FPU(3.14159265, 0.00000001, f5=FP_OP_F5.FADD, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+
+# res = FPU(2.5, 1.0, FP_OP_F5.FSUB, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+# res = FPU(-1235.1, -1.1, f5=FP_OP_F5.FSUB, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+# res = FPU(3.14159265, 0.00000001, f5=FP_OP_F5.FSUB, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+
+
+# res = FPU(2.5, 1.0, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+# res = FPU(-1235.1, -1.1, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+# res = FPU(3.14159265, 0.00000001, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+
+
 # # Inf - (+Inf) -> NaN
-res = FPU(0x7f800000, 0x7f800000, f5=FP_OP_F5.FSUB, f3=0, rs2=0)
+# res = FPU(0x7f800000, 0x7f800000, f5=FP_OP_F5.FSUB, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # Inf - (-Inf) -> +inf
 # res = FPU(0x7f800000, 0xff800000, f5=FP_OP_F5.FSUB, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # (-Inf) - (+Inf) -> -inf
 # res = FPU(0xff800000, 0x7f800000, f5=FP_OP_F5.FSUB, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # (-Inf) - (-Inf) -> NaN
 # res = FPU(0xff800000, 0xff800000, f5=FP_OP_F5.FSUB, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 
 # # Inf + (+Inf) -> +Inf
 # res = FPU(0x7f800000, 0x7f800000, f5=FP_OP_F5.FADD, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # Inf + (-Inf) -> Nan
 # res = FPU(0x7f800000, 0xff800000, f5=FP_OP_F5.FADD, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # (-Inf) + (+Inf) -> Nan
 # res = FPU(0xff800000, 0x7f800000, f5=FP_OP_F5.FADD, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # (-Inf) + (-Inf) -> -Inf
 # res = FPU(0xff800000, 0xff800000, f5=FP_OP_F5.FADD, f3=0, rs2=0)
-
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 
 # # Inf * (+Inf) -> +Inf
 # res = FPU(0x7f800000, 0x7f800000, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # Inf * (-Inf) -> -Inf
 # res = FPU(0x7f800000, 0xff800000, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # (-Inf) * (+Inf) -> -Inf
 # res = FPU(0xff800000, 0x7f800000, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
 # # # (-Inf) * (-Inf) -> +Inf
 # res = FPU(0xff800000, 0xff800000, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
+# print(res[0], f'{pack_f32(res[0]):08x}', hex(pack_fflags(res[1])))
+
+## ------------------------------------------------------------------------fcmp.S
+# res = FPU(-1.36, -1.36, FP_OP_F5.FCMP, FP_CMP_F3.EQ, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# res = FPU(-1.36, -1.36, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# res = FPU(-1.36, -1.36, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+
+# res = FPU(-1.37, -1.36, FP_OP_F5.FCMP, FP_CMP_F3.EQ, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# res = FPU(-1.37, -1.36, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# res = FPU(-1.37, -1.36, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+
+# print(res[0], res[1])
 
 
+# res = FPU(0x7fff_ffff, 0, FP_OP_F5.FCMP, FP_CMP_F3.EQ, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# res = FPU(0x7fff_ffff, 0x7fff_ffff, FP_OP_F5.FCMP, FP_CMP_F3.EQ, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# res = FPU(0x7f80_0001, 0.0, FP_OP_F5.FCMP, FP_CMP_F3.EQ, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# print(res[0], res[1])
+
+# res = FPU(qNAN, 0, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# res = FPU(qNAN, qNAN, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# res = FPU(0x7f80_0001, 0.0, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# # print(res[0], res[1])
+
+# res = FPU(qNAN, 0, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# # print(res[0], res[1]) # qNan
+# res = FPU(qNAN, qNAN, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# # print(res[0], res[1]) # sNan
+# res = FPU(0x7f80_0001, 0.0, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
+# print(res[0], hex(pack_fflags(res[1])))
+# # print(res[0], res[1])
+"""
+# --------------------------------------------------------------------------fcvt_w.S
+# res = FPU(-1.1, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-1.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-0.9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(0.9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(1.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(1.1, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-3e9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(3e9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+
+# res = FPU(-3.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-1.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-0.9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(0.9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(1.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(1.1, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-3e9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(3000000000., 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+
+# res = FPU(-1.1, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-1.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-0.9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(0.9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(1.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(1.1, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+
+
+# res = FPU(-3.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-1.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-0.9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(0.9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(1.0, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(1.1, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+# res = FPU(-3e9, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# print(f"{res[0]:016x}", hex(pack_fflags(res[1])))
+
+# res = FPU(-np.nan, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# res = FPU(-np.inf, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+
+# res = FPU(-np.nan, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+# res = FPU(-np.inf, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+
+# res = FPU(np.nan, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+# res = FPU(np.inf, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.W)
+
+# res = FPU(np.nan, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+# res = FPU(np.inf, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.L)
+
+
+# res = FPU(-np.nan, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# res = FPU( np.nan, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# res = FPU(-np.inf, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+# res = FPU( np.inf, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.WU)
+
+# res = FPU(-np.nan, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# res = FPU( np.nan, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# res = FPU(-np.inf, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+# res = FPU( np.inf, 0.0, FP_OP_F5.CVT_TO_INT, 0, FP_CVT_RS2.LU)
+
+# print(res[0], res[1], f"{res[0]:016x}")
+
+# res = FPU( 0, 0, FP_OP_F5.FSGNJ, FP_SGNJ_F3.J, 0)
+# print(res[0], res[1], f"{res[0]:08x}")
+
+# res = FPU(2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.W)
+# res = FPU(-2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.W)
+# res = FPU(2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.WU)
+# res = FPU(-2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.WU)
+
+# res = FPU(2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.L)
+# res = FPU(-2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.L)
+# res = FPU(2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.LU)
+# res = FPU(-2, 0.0, FP_OP_F5.CVT_TO_FP, 0, FP_CVT_RS2.LU)
+"""
 # res = FPU(2.5, 1.0, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
 # res = FPU(-1235.1, -1.1, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
 # res = FPU(3.14159265, 0.00000001, f5=FP_OP_F5.FMUL, f3=0, rs2=0)
