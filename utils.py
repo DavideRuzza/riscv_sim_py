@@ -255,9 +255,16 @@ class BlockReg(Reg):
             #         f" <- 0b{blk.val:0{blk.nbits}b}")
         else:
             super().__setattr__(attr, value)  # allow normal attributes
-            
+
 class RegFile:
-    def __init__(self, n_regs, bus_size=32, reg_names:list[str]=None):
+    def __init__(
+            self,
+            n_regs,
+            bus_size=32,
+            reg_names:list[str]=None,
+            lock_0=True, # lock writing first element
+            ):
+        
         self.n_regs = n_regs
         self.n_regs_log2 = int(log2(self.n_regs))
         self.bus_size = bus_size
@@ -265,6 +272,7 @@ class RegFile:
         self.reg_file = [0]*self.n_regs
         self.reg_names = reg_names
         self.hex_fmt = "%016x" if bus_size==64 else "%016x"
+        self.lock_0 = lock_0
         
         if not self.reg_names:
             self.reg_names = ["x%d"%i for i in range(self.n_regs)]
@@ -275,7 +283,11 @@ class RegFile:
         return self.reg_file[key]
 
     def __setitem__(self, key, value):
-        if key>0:
+        # if key>0 or self.lock_0:
+        if self.lock_0:
+            if key>0:
+                self.reg_file[key] = value & self.mask
+        else:
             self.reg_file[key] = value & self.mask
 
     def show(self, stop=None):
@@ -307,7 +319,7 @@ class RegFile:
             else:
                 dump_str+="%3s: %08x " % (name, self.reg_file[i])
         return dump_str
-
+    
 class CsrReg():
     
     def __init__(self, 
@@ -369,9 +381,12 @@ class CsrReg():
         if attr in self._blocks:
             blk = self._blocks[attr]
             if attr=='all':
-                lsb=0
-            else:
-                lsb = self._blk_bit_map[attr][-1]
+                if '_sdw' in self._blocks:
+                    self._sdw = self._sdw_ref
+            #     lsb=0
+                # pass
+            # else:
+            #     lsb = self._blk_bit_map[attr][-1]
             if blk.nbits>15:
                 log.debug(f"CSR block read {self.name}.{attr}"\
                     f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
@@ -407,7 +422,7 @@ class CsrReg():
                             self._blocks[name].val = blk_set_val
                     else:
                         self._blocks[name].val = blk_set_val   
-                                         
+
                 log.debug(f"CSR write {self.name}"\
                     f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
             else:
@@ -502,16 +517,18 @@ class CsrFile():
             if shadow:
                 if '.' in shadow:
                     base, block = shadow.split(".")
-                    # print(base, block, self[base]._blocks[block])
+                
+
+                    shw_blk = self[base]._blocks[block]
+
+                    block_map['_sdw'] = [shw_blk.nbits,0]
                     self.csr_map[addr] = CsrReg(
                         addr, name, 
                         xlen, block_map,
                         blk_wpri=wpri)
-                    # print()
-                    shw_blk = self[base]._blocks[block]
-                    self.csr_map[addr]._blocks['_base0'] = shw_blk
-                    self.csr_map[addr]._blk_bit_map['_base0'] = [shw_blk.nbits,0]
-                    # print(self.csr_map[addr]._blocks)
+                    
+                    self.csr_map[addr]._blocks['_sdw_ref'] = shw_blk
+                    self.csr_map[addr]._blk_bit_map['_sdw_ref'] = [shw_blk.nbits,0]
                 else:
                     self.csr_map[addr] = CsrReg(
                         addr, name, 
@@ -572,14 +589,11 @@ class CsrFile():
             out.append(f"* {y}0x{addr:03X} {g}{ul}{csr.name}{rst} "\
                 f"{gr}{bold}{'-'*(max_len-len(csr.name))}{gr}" \
                 f"{'rw' if csr.rw!=3 else f"r-"}-{csr.priv.name}- "\
-                f"{rst}0x{csr[:]:0{int(csr.nbits/4)}X}"
+                f"{rst}0x{csr.all:0{int(csr.nbits/4)}X}"
                 )
             
         return "\n".join(out)
     
-    
-
-
 def int_64(uint_64):
     uint_64 = Reg(64, uint_64)
     if uint_64[63]:

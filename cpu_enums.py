@@ -114,8 +114,8 @@ class FP_OP_F5(Enum):
     FSGNJ = 0b00100
     FMINMAX = 0b00101
     FCMP = 0b10100
-    CVT_TO_FP = 0b11000
-    CVT_TO_INT = 0b11010
+    CVT_TO_INT = 0b11000
+    CVT_TO_FP = 0b11010
     FMVT_X_W = 0b11100
     FCLASS = 0b11100
     FMVT_W_X = 0b11110
@@ -377,19 +377,19 @@ CSR_M = {
                     "OF":[2], "UF":[1], "NX":[0],
                     "FFL": [4,0],
                 }, {
-                    #"WPRI_0": [31, 8]
+                    "WPRI_0": [31, 8]
                 }, None),
 
     "frm":     (0x002, 32, {
                     "FRM": [2,0]
                 }, {
-                    #"WPRI_0": [31, 3]
+                    "WPRI_0": [31, 3]
                 }, 'fcsr.FRM'),
     
     "fflags":     (0x001, 32, {
                     "NV":[4], "DZ":[3],
-                    "OF":[2], "UF":[1], "NX":[1]
+                    "OF":[2], "UF":[1], "NX":[0]
                 }, {
-                    #"WPRI_0": [31, 5]
-                }, 'fcsr'),
+                    "WPRI_0": [31, 5]
+                }, 'fcsr.FFL'),
 }

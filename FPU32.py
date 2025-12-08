@@ -63,8 +63,10 @@ UINT32_MAX = 2**32 - 1
 INT64_MIN = -2**63
 INT64_MAX =  2**63 - 1
 UINT64_MAX = 2**64 - 1
-sNAN = 0x7f80_0001
-qNAN = 0x7fff_ffff
+
+sNaN = 0x7f80_0001
+qNaN = 0x7fff_ffff
+qNaNf = 0x7fc0_0000
 nZero = 0x8000_0000
 pZero = 0x0000_0000
 
@@ -199,7 +201,9 @@ def cvt_f32_to_int(
     # ---------- Unsigned conversion ----------
     else:
         if f32 < 0:
-            if int(f32)==0: # special case
+            if math.isinf(f32):
+                pass
+            elif int(f32)==0: # special case
                 fflags["NX"] = 1
             else:
                 fflags["NV"] = 1
@@ -357,7 +361,7 @@ def FPU(
         
         a = a&zero_sign_mask
         
-        print(hex(a_sign), hex(b_sign), hex(b_nsign))
+        # print(hex(a))
         if f3==FP_SGNJ_F3.J:
             a = a | b_sign
         elif f3==FP_SGNJ_F3.JN:
@@ -366,7 +370,6 @@ def FPU(
             a = a | ((a_sign^b_sign)&sign_mask)
         else:
             print("FSGNJ-boh")
-        
         return a, fflags
     
     elif f5==FP_OP_F5.FMINMAX:  # -> return fp
@@ -374,14 +377,20 @@ def FPU(
         
         
         if math.isnan(a) and math.isnan(b):
-            real = math.nan
-            fflags['NV'] = 1
+            # print("both nan")
+            real = to_f32(qNaNf)
+            if a_sNan or b_sNan:
+                fflags['NV'] = 1
         elif math.isnan(a) and not math.isnan(b):
-            real = b
-            fflags['NV'] = 1
+            real = b_f32
+            # print("a in nan, returning", hex(b_i32), hex(pack_f32(b_f32)))
+            if a_sNan:
+                fflags['NV'] = 1
         elif not math.isnan(a) and math.isnan(b):
-            real = a
-            fflags['NV'] = 1
+            real = a_f32
+            # print("b in nan, returning", a_f32)
+            if b_sNan:
+                fflags['NV'] = 1
         else:
             if f3==FP_MINMAX_F3.FMIN:
                 if a==0 and b==0:
@@ -438,7 +447,7 @@ def FPU(
                 class_res = FP_CLASS.posNorNum
             else:
                 class_res = FP_CLASS.negNorNum
-        return class_res, fflags
+        return class_res.value, fflags
     
     elif f5 == FP_OP_F5.FCMP:
         
@@ -493,7 +502,7 @@ def FPU(
             
         # print("integer", integer)
         if is32:
-            print(integer, a)
+            # print(integer, a)
             if float(integer)!=float(a) and fflags['NV']!=1:
                 fflags['NX'] = 1
             return sign_extend(integer&0xffff_ffff, 32)&0xffff_ffff_ffff_ffff, fflags
@@ -562,7 +571,10 @@ def FPU(
             fflags['UF'] = 1
 
         return f32, fflags
-    
+
+
+# res = FPU(0x7fffffff, 0x7fffffff, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0.0)
+# print(hex(pack_f32(res[0])), hex(pack_fflags(res[1])))
 """
 # ------------------------------------------------------------------------- fadd.S
 
@@ -654,18 +666,18 @@ def FPU(
 # print(res[0], hex(pack_fflags(res[1])))
 # print(res[0], res[1])
 
-# res = FPU(qNAN, 0, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
+# res = FPU(qNaN, 0, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
 # print(res[0], hex(pack_fflags(res[1])))
-# res = FPU(qNAN, qNAN, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
+# res = FPU(qNaN, qNaN, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
 # print(res[0], hex(pack_fflags(res[1])))
 # res = FPU(0x7f80_0001, 0.0, FP_OP_F5.FCMP, FP_CMP_F3.LT, 0)
 # print(res[0], hex(pack_fflags(res[1])))
 # # print(res[0], res[1])
 
-# res = FPU(qNAN, 0, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
+# res = FPU(qNaN, 0, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
 # print(res[0], hex(pack_fflags(res[1])))
 # # print(res[0], res[1]) # qNan
-# res = FPU(qNAN, qNAN, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
+# res = FPU(qNaN, qNaN, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
 # print(res[0], hex(pack_fflags(res[1])))
 # # print(res[0], res[1]) # sNan
 # res = FPU(0x7f80_0001, 0.0, FP_OP_F5.FCMP, FP_CMP_F3.LE, 0)
@@ -928,8 +940,8 @@ res = FPU(-1235.1, np.nan, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
 res = FPU(0.00000001, 3.14159265, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
 res = FPU(-2.0, -1.0, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
 
-res = FPU(0x3f800000, sNAN, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
-res = FPU(sNAN, sNAN, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(0x3f800000, sNaN, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
+res = FPU(sNaN, sNaN, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMAX, 0)
 
 
 res = FPU(nZero, pZero, FP_OP_F5.FMINMAX, FP_MINMAX_F3.FMIN, 0)

@@ -5,3 +5,4 @@ isa/
 xv6-riscv
 *.drawio
 FPU_WIP_old.py
+*.ipynb

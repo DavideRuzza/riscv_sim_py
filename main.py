@@ -6,7 +6,7 @@ from system_interface import SystemInterface
 from logger_config import setup_logging
 from pathlib import Path
 from typing import List, Dict, Tuple
-from FPU32 import FPU, pack_f32, pack_fflags, def_fflags
+from FPU32 import FPU, pack_f32, pack_fflags, qNaNf
 
 # from math import abs
 # # Max allowed repeats within recent jumps
@@ -174,7 +174,7 @@ class RV64Hart():
         self.ext_list : List[Ext] = [Ext.M]+extension_list
         
         self.regfile = RegFile(32, self.xlen, self.reg_names)
-        self.fp_regfile = RegFile(32, self.xlen, self.fp_reg_names)
+        self.fp_regfile = RegFile(32, self.xlen, self.fp_reg_names, lock_0=False)
         
         self.csr = CsrFile(self.ext_list)
         self.pc_rst = entry_point
@@ -554,6 +554,7 @@ class RV64Hart():
         
         fpr1 = self.fp_regfile[ins.I_rs1]
         fpr2 = self.fp_regfile[ins.I_rs2]
+        fpr3 = self.fp_regfile[ins.I_f5]
         
         if not is_compressed:
             i_imm = sign_extend(ins[31:20], 12) & self.mask64
@@ -647,21 +648,66 @@ class RV64Hart():
                 log.error("__to_host__")
                 return False
             self.sys_bus.write(addr, fpr2, 1<<ins.I_f3)  
+        elif op in [Ops.FMADD, Ops.FNMADD]:
+            f_f3 = ins.I_f3
+            res1, fflags1 = FPU(fpr1, fpr2, FP_OP_F5.FMUL, f_f3, ins.I_rs2)
+        
+            res2, fflags2 = FPU(res1, fpr3, FP_OP_F5.FADD, f_f3, ins.I_rs2)
+            
+            fflags1 = pack_fflags(fflags1)
+            fflags2 = pack_fflags(fflags2)
+            
+            res2 = res2 if op==Ops.FMADD else -res2
+            
+            new_rd = sign_extend(pack_f32(res2), 32)&self.mask64
+                
+            self.to_float_reg = True
+            self.write_back = True
+            
+            self.csr.fcsr.FFL = fflags1|fflags2  
+        elif op in [Ops.FMSUB, Ops.FMNSUB]:
+            f_f3 = ins.I_f3
+            res1, fflags1 = FPU(fpr1, fpr2, FP_OP_F5.FMUL, f_f3, ins.I_rs2)
+        
+            res2, fflags2 = FPU(res1, fpr3, FP_OP_F5.FSUB, f_f3, ins.I_rs2)
+            
+            fflags1 = pack_fflags(fflags1)
+            fflags2 = pack_fflags(fflags2)
+            
+            res2 = res2 if op==Ops.FMSUB else -res2
+            
+            new_rd = sign_extend(pack_f32(res2), 32)&self.mask64
+                
+            self.to_float_reg = True
+            self.write_back = True
+            
+            self.csr.fcsr.FFL = fflags1|fflags2           
         elif op==Ops.OP_FP:
             f_f5 = FP_OP_F5(ins.I_f5)
             f_f3 = ins.I_f3
             
+            # dont_sign_extend = False
             # print(f_f5, f_f3)
             if f_f5 == FP_OP_F5.FMVT_X_W and f_f3==0:
                 new_rd = fpr1
                 fflags = self.csr.fcsr.FFL
+            elif f_f5 == FP_OP_F5.FMVT_W_X:
+                new_rd = r1
+                self.to_float_reg=True
+                fflags = self.csr.fcsr.FFL
             elif f_f5 in [FP_OP_F5.FSGNJ, FP_OP_F5.FMINMAX, FP_OP_F5.FADD, FP_OP_F5.FSUB, FP_OP_F5.FMUL, FP_OP_F5.FDIV, FP_OP_F5.FSQRT]:
                 res, fflags = FPU(fpr1, fpr2, f_f5, f_f3, ins.I_rs2)
                 self.to_float_reg = True
-                new_rd = pack_f32(res)
                 
+                if f_f5!=FP_OP_F5.FSGNJ:
+                    new_rd = pack_f32(res)
+                else:
+                    new_rd = res
+                    
+                if fflags['NV']==1 and f_f5!=FP_OP_F5.FMINMAX:
+                    new_rd = 0x7fc00000
             elif f_f5 in [FP_OP_F5.CVT_TO_FP]:
-                res, fflags = FPU(r1, 0.0, f_f5, f_f3, ins.I_rs2)
+                res, fflags = FPU(r1, 0.0, f_f5, 0, ins.I_rs2)
                 self.to_float_reg = True
                 new_rd = pack_f32(res)
             
@@ -674,11 +720,12 @@ class RV64Hart():
             if type(fflags)==dict:
                 fflags = pack_fflags(fflags)
             
-            new_rd = sign_extend(new_rd, 32)&self.mask64
+            if f_f5!=FP_OP_F5.CVT_TO_INT:
+                new_rd = sign_extend(new_rd, 32)&self.mask64
+                
             self.write_back = True
             
-            self.csr.fcsr.FFL = fflags
-         
+            self.csr.fcsr.FFL = fflags         
         elif op==Ops.SYSTEM:
             if ins.I_f3 == 0:
                 f12 = SYS_F12(ins.I_f12)
@@ -742,6 +789,7 @@ class RV64Hart():
             log.error("Not Implemented")
             return False
         
+        # ------------------------------------------------------------------------
         self.handleException()
         
         if self.write_csr:
@@ -759,7 +807,8 @@ class RV64Hart():
         if self.write_back:
             
             if self.to_float_reg:
-                log.info(f"write reg - f{self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
+                log.info(f"write reg - {self.fp_reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
+                
                 self.fp_regfile[ins.I_rd] = new_rd
             else:
                 log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
@@ -786,9 +835,8 @@ class RV64Hart():
         return True
         
 RISCV_TEST = 1
-DEBUG = 1
+DEBUG = 0
 FREERUN = 1
-
 
 if DEBUG:
     setup_logging(logging.DEBUG)
@@ -802,9 +850,9 @@ tests = sorted(list(input_path.glob("rv64uf-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
 
-tests = [Path("tests/rv64/bin/p/rv64uf-p-fadd.bin")]
+tests = [Path("tests/rv64/bin/p/rv64uf-p-move.bin")]
 # tests = [Path("xv6-riscv/kernel.bin")]
-tests = [tests[0]]
+# tests = [tests[0]]
 
 for test in tests:
     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", 
@@ -814,7 +862,6 @@ for test in tests:
     ram.expand(0x10000)
     sys_bus = SystemInterface()
     sys_bus.register_device(ram, 0x8000_0000)
-    print(sys_bus)
     if RISCV_TEST:
         to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
     else:
@@ -886,50 +933,6 @@ for test in tests:
     else:
         print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ")
     
-    del h0
+    del h0.csr, h0, ram
 
 
-# csr = CsrFile()
-# csr.fcsr.FFL=1
-# print(csr) 
-
-# csr = CsrFile([Ext.M])
-# csr.mstatus.update_warl_blk("MPP", [1, 2, 3])
-# csr.mepc.all=0x800001a8
-# print(hex(csr.mepc.all))
-# csr.mstatus.MPP = 1
-# # print(csr.mstatus.blk_wpri)
-# # print(bin(csr.mstatus.gen_wpri_mask()))
-# # print(bin(csr.mstatus.gen_wpri_mask(True)))
-# # print(bin(csr.mstatus.gen_blk_mask('MPP')))
-# print(csr.mstatus.all)
-# csr.sstatus.all = 0xffff_ffff_ffff_ffff
-# print(bin(csr.mstatus.all))
-# print(bin(csr.sstatus.all))
-# print(bin(csr.mstatus.all))
-
-# print(h0.csr)
-# print(hex(h0.pc))
-# hex(sys_bus.read(0x80000000, 4))
-# print(hex(ram.read(0x00002000, 8)))
-# csr = CSRFile([Ext.M])
-# print(csr)
-# csr['mhartid'] = 10
-
-# import logging
-# from devices import MemoryDevice
-# from system_interface import SystemInterface
-# from logger_config import setup_logging
-
-# setup_logging(logging.DEBUG)
-# log = logging.getLogger(__name__)
-# ram =  MemoryDevice.from_binary_file("tests/rv32/bin/p/rv32mi-p-csr.bin", "RAM")
-# sys_bus = SystemInterface()
-# sys_bus.register_device(ram, 0x8000_0000)
- 
-# print(sys_bus)
-
-# sys_bus.write(0x8000_0000, 0xaaaa_aaaa)
-# # print(hex(sys_bus.read(0x8000_2010, 1)))
-
-# ram.hexdump()
