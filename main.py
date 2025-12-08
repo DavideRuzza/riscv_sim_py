@@ -72,6 +72,7 @@ def alu(op1:int, op2:int, f3: OP_F3, f7: int, op32: bool=False, op_imm:bool=Fals
             return (s_op1*op2)>>64
         else:
             raise Exception(f"M extension f3 {mf3} not implemented")
+        
     elif f3==OP_F3.ADD_SUB:
         if f7:
             return op1-op2
@@ -591,9 +592,10 @@ class RV64Hart():
             f3 = OP_F3(ins.I_f3)
             cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
             f7 = ins.I_f7 if cond else 0
-            # if f3==OP_F3.SRX:# for SRAI and SRLI f7 is actually only the top 6 bits
-            #     f7 >>= 1
-            new_rd = alu(r1, i_imm, f3, f7, False, True)          
+            if f3==OP_F3.SRX:# for SRAI and SRLI f7 is actually only the top 6 bits
+                f7 >>= 1
+            new_rd = alu(r1, i_imm, f3, f7, False, True)
+                 
         elif op==Ops.OP_IMM_32:
             f3 = OP_F3(ins.I_f3)
             cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
@@ -846,11 +848,11 @@ else:
 log = logging.getLogger(__name__)
 input_path = Path("tests/rv64/bin/p")
 
-tests = sorted(list(input_path.glob("rv64uf-p-*.bin")))
+tests = sorted(list(input_path.glob("rv64ui-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
 
-tests = [Path("tests/rv64/bin/p/rv64uf-p-move.bin")]
+# tests = [Path("tests/rv64/bin/p/rv64mi-p-mcsr.bin")]
 # tests = [Path("xv6-riscv/kernel.bin")]
 # tests = [tests[0]]
 
@@ -867,7 +869,8 @@ for test in tests:
     else:
         to_host_addr=0
     
-    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M], to_host_addr=to_host_addr)
+    # h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
+    h0 = RV64Hart(0, sys_bus, [Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
 
     break_debug=True
     while(h0.step() and break_debug):
