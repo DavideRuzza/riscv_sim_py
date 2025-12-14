@@ -7,91 +7,8 @@ from logger_config import setup_logging
 from pathlib import Path
 from typing import List, Dict, Tuple
 from FPU32 import FPU, pack_f32, pack_fflags, qNaNf
+from operators import alu
 
-# from math import abs
-# # Max allowed repeats within recent jumps
-# MAX_JUMP_REPEAT = 20
-
-
-def shift_unit(op, shamt, f3:OP_F3, f7:int, op32: bool=False):
-    
-    xlen = 32 if op32 else 64
-    shamt = shamt&0b11111 if op32 else shamt&0b111111
-    mask = (1<<xlen)-1
-    
-    if f3 == OP_F3.SLL:
-        return (op&mask)<<shamt
-    elif f3 == OP_F3.SRX:
-        if f7: # SRA
-            return sign_extend((op&mask)>>shamt, xlen-shamt)&mask
-        else:
-            return (op&mask)>>shamt
-    else:
-        raise Exception(f"{f3} not implemented in shift unit")
-
-def sign(num):
-    return -1 if num<0 else 1
-
-def sign64(num):
-    return -1 if (num>>64)==1 else 1
-
-def sign32(num):
-    return -1 if (num>>32)==1 else 1
- 
-def alu(op1:int, op2:int, f3: OP_F3, f7: int, op32: bool=False, op_imm:bool=False):  
-
-    if not op_imm and f7&0b1==1: # is_M
-        mf3 = OP_MUL_F3(f3.value)
-        # print(hex(op1), hex(op2))
-        # print(abs(int_64(op1)), abs(int_64(op2)))
-        log.error(mf3)
-        s_op1 = int_64(op1)
-        s_op2 = int_64(op2)
-        if mf3==OP_MUL_F3.DIV:
-            s = sign(s_op1)*sign(s_op2) # find sign
-            if op2==0: return -1
-            else: return s*(abs(s_op1)//abs(s_op2))
-        if mf3==OP_MUL_F3.DIVU:
-            if op2==0: return -1
-            else: return op1//op2
-        if mf3==OP_MUL_F3.REM:
-            s = sign(int_64(op1)) # find sign
-            if op2==0: return op1
-            else: return s*(abs(s_op1)%abs(s_op2))
-        if mf3==OP_MUL_F3.REMU:                
-            s = sign(int_64(op1)) # find sign
-            if op2==0: return op1
-            else: return op1%op2
-        if mf3==OP_MUL_F3.MUL:
-            return s_op1*s_op2
-        if mf3==OP_MUL_F3.MULH:
-            return (s_op1*s_op2)>>64
-        if mf3==OP_MUL_F3.MULHU:
-            return (op1*op2)>>64
-        if mf3==OP_MUL_F3.MULHSU:
-            return (s_op1*op2)>>64
-        else:
-            raise Exception(f"M extension f3 {mf3} not implemented")
-        
-    elif f3==OP_F3.ADD_SUB:
-        if f7:
-            return op1-op2
-        else:
-            return op1+op2    
-    elif f3==OP_F3.AND:
-        return op1 & op2
-    elif f3==OP_F3.OR:
-        return op1 | op2
-    elif f3==OP_F3.XOR:
-        return op1 ^ op2
-    elif f3==OP_F3.SLT:
-        return int_64(op1) < int_64(op2)
-    elif f3==OP_F3.SLTU:
-        return op1 < op2
-    elif f3==OP_F3.SLL or f3==OP_F3.SRX:
-        return shift_unit(op1, op2, f3, f7, op32)
-    else:
-        raise Exception(f"{f3} not implemented in ALU")
 
 def branch_unit(op1:int, op2:int, f3: BR_F3):
     if f3==BR_F3.BNE:
@@ -814,9 +731,6 @@ class RV64Hart():
             else:
                 log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
                 self.regfile[ins.I_rd] = new_rd
-            
-            # print(hex(self.csr['mtvec'][1:0]))
-            # print(self.regfile)
         
         if self.inst_ret:
             if self.csr['mcountinhibit']._blocks['IR'].val == 0:
@@ -837,7 +751,10 @@ class RV64Hart():
         
 RISCV_TEST = 0
 DEBUG = 1
-FREERUN = 1
+FREERUN = 0
+
+
+csr = CsrFile()
 
 if DEBUG:
     setup_logging(logging.DEBUG)
@@ -851,7 +768,6 @@ tests = sorted(list(input_path.glob("rv64ui-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
 
-# tests = [Path("tests/rv64/bin/p/rv64mi-p-mcsr.bin")]
 
 tests = [Path("xv6-riscv/kernel.bin")]
 
@@ -925,6 +841,17 @@ for test in tests:
                         while(h0.step()):pass
                         h0.set_breakpoint(0)
                     break
+                elif cmd[0]=='csr':
+                    try:
+                        if cmd[1].startswith('0x'):
+                            print(h0.csr[int(cmd[1], 16)])
+                        else:
+                            # if cmd[1] in h0.csr.name_to_addr:
+                            print(h0.csr[h0.csr.name_to_addr[cmd[1]]])
+                    except KeyError:
+                        print(f"{cmd[1]} not a valid csr" )   
+
+
         else: pass
         
     syscall_code = h0.regfile[17]

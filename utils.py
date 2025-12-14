@@ -50,17 +50,6 @@ COL = {
     "c" : "\033[36m",
     "w" : "\033[37m",
     "gr": "\033[90m",
-
-
-    # Bright colors
-    # "bright_black": "\033[90m",
-    # "bright_red": "\033[91m",
-    # "bright_green": "\033[92m",
-    # "bright_yellow": "\033[93m",
-    # "bright_blue": "\033[94m",
-    # "bright_magenta": "\033[95m",
-    # "bright_cyan": "\033[96m",
-    # "bright_white": "\033[97m",
 }
 
 def full_bin(num, l=32):
@@ -455,8 +444,7 @@ class CsrReg():
     def update_warl_blk(self, blk_name:str, warl_list:List[int]):
         
         self.blk_warl[blk_name] = warl_list
-
-    
+        
     def gen_blk_mask(self, name=None, neg=False):
         # generate mask of 1 where there is a csr block
         mask = 0
@@ -493,6 +481,19 @@ class CsrReg():
         if neg: mask = (~mask) & self.mask
     
         return mask & self.mask
+
+    def __str__(self):
+        y = COL['y']
+        g = COL['g']
+        gr = COL['gr']
+        rst = COL['rst']
+        bold = COL['bold']
+        ul = COL['underline']
+            
+        return f"* {y}0x{self.addr:03X} {g}{ul}{self.name}{rst} "\
+            f"{gr}{bold}{'-'*(1)}{gr}" \
+            f"{'rw' if self.rw!=3 else f"r-"}-{self.priv.name}- "\
+            f"{rst}0x{self.all:0{int(self.nbits/4)}X}"
     
 #########################
 
