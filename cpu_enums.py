@@ -301,6 +301,14 @@ CSR_M = {
         **{f"HPM{i}": [i] for i in range(3, 32)}, "IR":[2], "CY":[0]},
                      {"WPRI_0":[1]}, None),
     
+    "menvcfg":  (0x30A, 64, {
+                    "FIOM":[0], "LPE":[2], "SSE": [3], "CBIE": [5, 4],
+                    "CBCFE": [6], "CBZE": [7], "PMM": [33, 32], "DTE": [59],
+                    "CDE":[60], "ADUE":[61], "PBMTE":[62], "STCE":[63]
+                }, {
+                    "WPRI_0" : [1], "WPRI_1" : [31, 8], "WPRI_2" : [58, 34],                   
+                }, None),
+    
     "mscratch": (0x340, 64, {}, {}, None),
     "mepc":     (0x341, 64, {}, {}, None),
     "mcause":   (0x342, 64, {"INT":[63], "CODE": [62, 0]}, {}, None),
@@ -326,7 +334,7 @@ CSR_M = {
     "minstret": (0xb02, 64, {}, {}, None),
     
     
-    # "mtime":    (0x000, 64, {}, {}, None),
+    "rdtime":    (0xC01, 64, {"COUNT":[63, 0]}, {}, None),
     # "mtimecmp": (0x000, 64, {}, {}, None),
     ##### DEBUG #######
     "tcontrol": (0x7a5, 64, {"MPTE" : [7], "MPE":[3]}, {}, None),

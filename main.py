@@ -594,8 +594,7 @@ class RV64Hart():
             f7 = ins.I_f7 if cond else 0
             if f3==OP_F3.SRX:# for SRAI and SRLI f7 is actually only the top 6 bits
                 f7 >>= 1
-            new_rd = alu(r1, i_imm, f3, f7, False, True)
-                 
+            new_rd = alu(r1, i_imm, f3, f7, False, True)                 
         elif op==Ops.OP_IMM_32:
             f3 = OP_F3(ins.I_f3)
             cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
@@ -836,8 +835,8 @@ class RV64Hart():
         
         return True
         
-RISCV_TEST = 1
-DEBUG = 0
+RISCV_TEST = 0
+DEBUG = 1
 FREERUN = 1
 
 if DEBUG:
@@ -853,7 +852,9 @@ length = [len(str(t.stem)) for t in tests]
 
 
 # tests = [Path("tests/rv64/bin/p/rv64mi-p-mcsr.bin")]
-# tests = [Path("xv6-riscv/kernel.bin")]
+
+tests = [Path("xv6-riscv/kernel.bin")]
+
 # tests = [tests[0]]
 
 for test in tests:
@@ -869,8 +870,8 @@ for test in tests:
     else:
         to_host_addr=0
     
-    # h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
-    h0 = RV64Hart(0, sys_bus, [Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
+    # h0 = RV64Hart(0, sys_bus, [Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
 
     break_debug=True
     while(h0.step() and break_debug):
