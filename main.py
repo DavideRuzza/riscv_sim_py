@@ -800,6 +800,22 @@ for test in tests:
                     print("Exiting CPU loop.")
                     break_debug=False
                     break 
+                elif cmd[0] in ['help', 'h']:
+                    print("\n RISC-V debugger by @DavideRuzza. \n Basic commands list:\n"+\
+                          " - 'ret key'         just by pressing return key the program counter will be increased by one\n"+\
+                          " - priv              return current priviledge mode of the core\n"+\
+                          " - reg xxx           xxx=[0, 1, a0, ra, ...] if passed a valid integer register number or name\n"+\
+                          "                         it will return the content of that register. if no argument is passed\n"+\
+                          "                         the entire integer register file will be printed\n"+\
+                          " - freg xxx          xxx=[0, 1, fs0, ft0, ...] if passed a valid float register number or name\n"+\
+                          "                         it will return the content of that register. if no argument is passed\n"+\
+                          "                         the entire float register file will be printed\n"+\
+                          " - br 0x12345678     set a breakpoint until specified address and run free until target point\n"+\
+                          " - csr yyy           yyy=[mstatus, 0x300, ...] return the value of a csr register by name or \n"+\
+                          "                     hex address\n"+\
+                          " - q / quit          quit debugger\n\n"                          
+                    )
+                          
                 elif cmd[0]=="priv":
                     print(h0.mode)
                 elif cmd[0]=="reg":
