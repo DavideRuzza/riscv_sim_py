@@ -1,6 +1,6 @@
 import logging
 from cpu_enums import *
-from devices import MemoryDevice
+from devices import MemoryDevice, CLINT, InterruptController
 from utils import *
 from system_interface import SystemInterface
 from logger_config import setup_logging
@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 from FPU32 import FPU, pack_f32, pack_fflags, qNaNf
 from operators import alu
-
+from scratchpad.com import UART16550
 
 def branch_unit(op1:int, op2:int, f3: BR_F3):
     if f3==BR_F3.BNE:
@@ -749,10 +749,10 @@ class RV64Hart():
         
         return True
         
-RISCV_TEST = 0
-DEBUG = 1
-FREERUN = 0
-
+RISCV_TEST = 1
+DEBUG = 0
+FREERUN = 1
+CONSOLE = 0
 
 csr = CsrFile()
 
@@ -768,8 +768,11 @@ tests = sorted(list(input_path.glob("rv64ui-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
 
+# ------------------------------ memory map
+# ref : https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
 
-tests = [Path("xv6-riscv/kernel.bin")]
+
+# tests = [Path("xv6-riscv/kernel.bin")]
 
 # tests = [tests[0]]
 
@@ -777,98 +780,132 @@ for test in tests:
     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", 
           end='\n' if DEBUG else '', flush=True)
     
+    if CONSOLE:
+        uart = UART16550()
     ram = MemoryDevice.from_binary_file(test, "RAM")
     ram.expand(0x10000)
+    
+    # clint = CLINT()
+    clint = CLINT(0x100)
+    plic = InterruptController(context_num=2, interrupt_source_num=31)
+    
+    
+    
     sys_bus = SystemInterface()
+    
+    sys_bus.register_device(clint, 0x200_0000)
+    sys_bus.register_device(plic, 0xc00_0000)
+    
+    if CONSOLE:
+        sys_bus.register_device(uart, 0x1000_0000)
+        
     sys_bus.register_device(ram, 0x8000_0000)
+    
+    # print(sys_bus)
+    if CONSOLE:
+        uart.shutdown()
+    
+    
     if RISCV_TEST:
         to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
     else:
         to_host_addr=0
     
     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
-    # h0 = RV64Hart(0, sys_bus, [Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
 
     break_debug=True
-    while(h0.step() and break_debug):
-        if DEBUG and not FREERUN:
-            while True: # Debugger
-                cmd = input("> ")
-                cmd : List[str] = [c.lower() for c in cmd.strip().split(" ")]
-                
-                if cmd[0]=="q" or cmd[0]=="quit":
-                    print("Exiting CPU loop.")
-                    break_debug=False
-                    break 
-                elif cmd[0] in ['help', 'h']:
-                    print("\n RISC-V debugger by @DavideRuzza. \n Basic commands list:\n"+\
-                          " - 'ret key'         just by pressing return key the program counter will be increased by one\n"+\
-                          " - priv              return current priviledge mode of the core\n"+\
-                          " - reg xxx           xxx=[0, 1, a0, ra, ...] if passed a valid integer register number or name\n"+\
-                          "                         it will return the content of that register. if no argument is passed\n"+\
-                          "                         the entire integer register file will be printed\n"+\
-                          " - freg xxx          xxx=[0, 1, fs0, ft0, ...] if passed a valid float register number or name\n"+\
-                          "                         it will return the content of that register. if no argument is passed\n"+\
-                          "                         the entire float register file will be printed\n"+\
-                          " - br 0x12345678     set a breakpoint until specified address and run free until target point\n"+\
-                          " - csr yyy           yyy=[mstatus, 0x300, ...] return the value of a csr register by name or \n"+\
-                          "                     hex address\n"+\
-                          " - q / quit          quit debugger\n\n"                          
-                    )
-                          
-                elif cmd[0]=="priv":
-                    print(h0.mode)
-                elif cmd[0]=="reg":
-                    if len(cmd)>1:
-                        if cmd[1].isnumeric():
-                            if int(cmd[1])<32:
-                                reg_name = h0.reg_names[int(cmd[1])]
-                                print(f"{reg_name}: {h0.regfile[int(cmd[1])]:016x}\n")
+    
+    m_ctx = plic.register_context(hart=h0, bit=11)
+    
+    # print(plic.ctx_list[0][0])
+    # print(plic.ctx_list[0][1])
+    
+    
+    # break
+    try:
+        while(h0.step() and break_debug):
+            if DEBUG and not FREERUN:
+                while True: # Debugger
+                    cmd = input("> ")
+                    cmd : List[str] = [c.lower() for c in cmd.strip().split(" ")]
+                    
+                    if cmd[0]=="q" or cmd[0]=="quit":
+                        print("Exiting CPU loop.")
+                        break_debug=False
+                        break 
+                    elif cmd[0] in ['help', 'h']:
+                        print("\n RISC-V debugger by @DavideRuzza. \n Basic commands list:\n"+\
+                            " - 'ret key'         just by pressing return key the program counter will be increased by one\n"+\
+                            " - priv              return current priviledge mode of the core\n"+\
+                            " - reg xxx           xxx=[0, 1, a0, ra, ...] if passed a valid integer register number or name\n"+\
+                            "                         it will return the content of that register. if no argument is passed\n"+\
+                            "                         the entire integer register file will be printed\n"+\
+                            " - freg xxx          xxx=[0, 1, fs0, ft0, ...] if passed a valid float register number or name\n"+\
+                            "                         it will return the content of that register. if no argument is passed\n"+\
+                            "                         the entire float register file will be printed\n"+\
+                            " - br 0x12345678     set a breakpoint until specified address and run free until target point\n"+\
+                            " - csr yyy           yyy=[mstatus, 0x300, ...] return the value of a csr register by name or \n"+\
+                            "                     hex address\n"+\
+                            " - q / quit          quit debugger\n\n"                          
+                        )
+                            
+                    elif cmd[0]=="priv":
+                        print(h0.mode)
+                    elif cmd[0]=="reg":
+                        if len(cmd)>1:
+                            if cmd[1].isnumeric():
+                                if int(cmd[1])<32:
+                                    reg_name = h0.reg_names[int(cmd[1])]
+                                    print(f"{reg_name}: {h0.regfile[int(cmd[1])]:016x}\n")
+                                else:
+                                    print(f"No reg x{cmd[1]}\n")
                             else:
-                                print(f"No reg x{cmd[1]}\n")
+                                if cmd[1] in h0.reg_names:
+                                    print(f"{cmd[1]}: 0x{h0.regfile[h0.reg_names.index(cmd[1])]:016x}\n")
+                                else:
+                                    print(f"No reg named {cmd[1]}\n")
                         else:
-                            if cmd[1] in h0.reg_names:
-                                print(f"{cmd[1]}: 0x{h0.regfile[h0.reg_names.index(cmd[1])]:016x}\n")
+                            print(h0.regfile)
+                            
+                    elif cmd[0]=="freg":
+                        if len(cmd)>1:
+                            if cmd[1].isnumeric():
+                                if int(cmd[1])<32:
+                                    reg_name = h0.fp_reg_names[int(cmd[1])]
+                                    print(f"{reg_name}: {h0.fp_regfile[int(cmd[1])]:016x}\n")
+                                else:
+                                    print(f"No reg x{cmd[1]}\n")
                             else:
-                                print(f"No reg named {cmd[1]}\n")
-                    else:
-                        print(h0.regfile)
-                        
-                elif cmd[0]=="freg":
-                    if len(cmd)>1:
-                        if cmd[1].isnumeric():
-                            if int(cmd[1])<32:
-                                reg_name = h0.fp_reg_names[int(cmd[1])]
-                                print(f"{reg_name}: {h0.fp_regfile[int(cmd[1])]:016x}\n")
-                            else:
-                                print(f"No reg x{cmd[1]}\n")
+                                if cmd[1] in h0.fp_reg_names:
+                                    print(f"{cmd[1]}: 0x{h0.fp_regfile[h0.fp_reg_names.index(cmd[1])]:016x}\n")
+                                else:
+                                    print(f"No reg named {cmd[1]}\n")
                         else:
-                            if cmd[1] in h0.fp_reg_names:
-                                print(f"{cmd[1]}: 0x{h0.fp_regfile[h0.fp_reg_names.index(cmd[1])]:016x}\n")
+                            print(h0.fp_regfile)
+                    elif cmd[0]=="":
+                        break
+                    elif cmd[0]=="br":
+                        if len(cmd)>1:
+                            h0.set_breakpoint(int(cmd[1], 16))
+                            while(h0.step()):pass
+                            h0.set_breakpoint(0)
+                        break
+                    elif cmd[0]=='csr':
+                        try:
+                            if cmd[1].startswith('0x'):
+                                print(h0.csr[int(cmd[1], 16)])
                             else:
-                                print(f"No reg named {cmd[1]}\n")
-                    else:
-                        print(h0.fp_regfile)
-                elif cmd[0]=="":
-                    break
-                elif cmd[0]=="br":
-                    if len(cmd)>1:
-                        h0.set_breakpoint(int(cmd[1], 16))
-                        while(h0.step()):pass
-                        h0.set_breakpoint(0)
-                    break
-                elif cmd[0]=='csr':
-                    try:
-                        if cmd[1].startswith('0x'):
-                            print(h0.csr[int(cmd[1], 16)])
-                        else:
-                            # if cmd[1] in h0.csr.name_to_addr:
-                            print(h0.csr[h0.csr.name_to_addr[cmd[1]]])
-                    except KeyError:
-                        print(f"{cmd[1]} not a valid csr" )   
-
-
-        else: pass
+                                # if cmd[1] in h0.csr.name_to_addr:
+                                print(h0.csr[h0.csr.name_to_addr[cmd[1]]])
+                        except KeyError:
+                            print(f"{cmd[1]} not a valid csr" )   
+            else: pass
+    except KeyboardInterrupt:       
+        print("Keyboard Interrupt")
+    finally:
+        if CONSOLE:
+            uart.shutdown()
+            del uart
         
     syscall_code = h0.regfile[17]
     syscall_data = h0.regfile[10] 
@@ -880,6 +917,8 @@ for test in tests:
     else:
         print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ")
     
-    del h0.csr, h0, ram
+    del h0, ram, sys_bus 
+    
+    
 
 

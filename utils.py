@@ -5,10 +5,7 @@ from cpu_enums import *
 from typing import Dict, List, Tuple
 from elftools.elf.elffile import ELFFile
 
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from main import RV64Hart
 
 import logging
 

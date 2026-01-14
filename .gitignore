@@ -6,3 +6,7 @@ xv6-riscv
 *.drawio
 FPU_WIP_old.py
 *.ipynb
+scratchpad/
+opensbi/
+# compile_dt.sh
+copy_opensbi.sh
