@@ -149,12 +149,110 @@ class MemoryDevice(BaseDevice):
     def __repr__(self):
         return f"{self.__class__.__name__}(name={self.name}, size={self.size_str()})"
  
-#https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
-#https://chromitem-soc.readthedocs.io/en/0.9.9/clint.html
+# https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
+# https://chromitem-soc.readthedocs.io/en/0.9.9/clint.html
 # https://pdos.csail.mit.edu/6.828/2025/readings/FU540-C000-v1.0.pdf
+# https://www.kernel.org/doc/Documentation/devicetree/bindings/timer/sifive%2Cclint.yaml
 class CLINT(BaseDevice):
-    def __init__(self, size):
-        super().__init__(size, "CLINT")
+    
+    # standard timer interrupt bit in MIP csr
+    MTIP = 7
+    STIP = 5
+    
+    # standard software interrupt bit in MIP csr
+    MSIP = 3
+    SSIP = 1
+    
+    BASE_MSIP = 0x0
+    BASE_MTIMECMP = 0x4000
+    BASE_MTIME = 0xBFF8 
+    
+    def __init__(self):
+        super().__init__(size=0xC000, name="CLINT")
+            
+        self.num_harts : int = 0
+        self.hart_mip : List[CsrReg] = []
+        
+        self.timer_int_pending = []
+        self.software_int_pending = []
+        
+        self.mtime : int = 0
+        
+        self.mtimecmp : List[int]= []
+    
+    def inc_time(self):
+        
+        self.mtime += 1
+        self.update_logic()
+        
+    def update_logic(self):
+        
+        for i in range(self.num_harts):
+            if self.mtimecmp[i] < self.mtime:
+                self.timer_int_pending[i] = 1
+                self.hart_mip[i].MTIP = 1
+            else:
+                self.timer_int_pending[i] = 0
+                self.hart_mip[i].MTIP = 0
+                
+        for i in range(self.num_harts):
+            if self.software_int_pending[i] > 0:
+                self.hart_mip[i].MSIP = 1
+            else:
+                self.hart_mip[i].MSIP = 0
+        
+        
+    def register_hart(self, hart = 'RV64Hart'):
+        self.num_harts+=1
+        self.hart_mip.append(hart.csr.mip)
+        self.timer_int_pending.append(0)
+        self.software_int_pending.append(0)
+        self.mtimecmp.append(0)
+
+    
+    def read(self, addr, size = 4):
+        
+
+        if self.BASE_MSIP<=addr<self.BASE_MTIMECMP:
+            
+            addr -= self.BASE_MSIP
+            hart_id = addr>>2
+            if hart_id<self.num_harts:
+                return self.software_int_pending[hart_id]
+            
+        elif self.BASE_MTIMECMP<=addr<self.BASE_MTIME:
+                
+            addr -= self.BASE_MTIMECMP
+            hart_id = addr>>2
+            if hart_id<self.num_harts:
+                return self.mtimecmp[hart_id]
+            
+        elif addr == self.BASE_MTIME:
+            return self.mtime
+                
+        return 0
+    
+    def write(self, addr, value, size = 4):
+        
+        if self.BASE_MSIP<=addr<self.BASE_MTIMECMP:
+            
+            addr -= self.BASE_MSIP
+            hart_id = addr>>2
+            if hart_id<self.num_harts:
+                self.software_int_pending[hart_id] = value & 0x1 
+            
+        elif self.BASE_MTIMECMP<=addr<self.BASE_MTIME:
+                
+            addr -= self.BASE_MTIMECMP
+            hart_id = addr>>2
+            if hart_id<self.num_harts:
+                print("mtime_cmp h{}".format(hart_id), value)
+                self.mtimecmp[hart_id] = value
+            
+        elif addr == self.BASE_MTIME:
+            self.mtime = value
+        
+        self.update_logic()        
 
 
 # https://www.kernel.org/doc/Documentation/devicetree/bindings/interrupt-controller/sifive%2Cplic-1.0.0.txt
@@ -176,15 +274,10 @@ class InterruptController(BaseDevice):
         self.num_sources = interrupt_source_num + 1 
         # every context is assigned to a MIP, MIE and xEIP bit position 
         self.ctx_list : List[Tuple[CsrReg, int]] = []
-        
         self.priority = [0] * (self.num_sources)
-        
         self.pending = [0] * (self.num_sources)
-        
         self.enable = [[0] * (self.num_sources) for _ in range(context_num)]
-        
         self.threshold = [0] * context_num
-
         self.claimed = [0] * context_num
 
     def set_interrupt(self, irq_source):
@@ -313,12 +406,12 @@ class InterruptController(BaseDevice):
         elif self.THRES_CLAIM_BASE<=addr<self.size:
             addr = addr-self.THRES_CLAIM_BASE
             
-            ctx = addr // 0x1000
+            ctx = addr // self.CONTEXT_OFFSET
             if ctx>=len(self.ctx_list):
                 return 0
             
             # check the memory address num
-            reg_cond = ((addr-ctx*0x1000)>>2)
+            reg_cond = ((addr-ctx*self.CONTEXT_OFFSET)>>2)
             if reg_cond == 0:
                 # priority
                 return self.threshold[ctx]
@@ -355,10 +448,10 @@ class InterruptController(BaseDevice):
         elif self.THRES_CLAIM_BASE<=addr<self.size:
             addr = addr-self.THRES_CLAIM_BASE
             
-            ctx = addr // 0x1000
+            ctx = addr // self.CONTEXT_OFFSET
             
             # check the memory address num
-            reg_cond = ((addr-ctx*0x1000)>>2)
+            reg_cond = ((addr-ctx*self.CONTEXT_OFFSET)>>2)
             
             if reg_cond == 0:
                 # priority
