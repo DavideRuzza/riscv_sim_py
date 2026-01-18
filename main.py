@@ -748,7 +748,9 @@ class RV64Hart():
         self.pc = self.new_pc & self.mask64
         
         return True
-        
+
+
+"""
 RISCV_TEST = 1
 DEBUG = 0
 FREERUN = 1
@@ -922,3 +924,4 @@ for test in tests:
     
 
 
+"""

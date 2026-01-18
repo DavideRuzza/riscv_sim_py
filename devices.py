@@ -163,7 +163,7 @@ class InterruptController(BaseDevice):
     
     PENDING_BASE = 0x1000
     ENABLE_BASE = 0x2000
-    CLAIM_BASE = 0x20_0000
+    THRES_CLAIM_BASE = 0x20_0000
     
     CONTEXT_OFFSET = 0x1000
     
@@ -171,7 +171,7 @@ class InterruptController(BaseDevice):
             context_num: int, 
             interrupt_source_num: int,
         ):
-        super().__init__(0x40_000, "PLIC")
+        super().__init__(size=0x40_0000, name="PLIC")
         
         self.num_sources = interrupt_source_num + 1 
         # every context is assigned to a MIP, MIE and xEIP bit position 
@@ -185,11 +185,11 @@ class InterruptController(BaseDevice):
         
         self.threshold = [0] * context_num
 
-        self.serving_irq = [0] * context_num
+        self.claimed = [0] * context_num
 
     def set_interrupt(self, irq_source):
         self.pending[irq_source] = 1
-        
+        self.update_logic()
     
     def register_context(self, hart: 'RV64Hart', bit: int)->int:
         ''' 
@@ -202,7 +202,7 @@ class InterruptController(BaseDevice):
         ctx_num = len(self.ctx_list)
         
         self.ctx_list.append(
-            (hart.csr.mip, hart.csr.mie, bit)
+            (hart.csr.mip, bit)
         ) 
         
         return ctx_num
@@ -218,23 +218,26 @@ class InterruptController(BaseDevice):
                 # if the source is enabled for the context
                 if self.pending[src] and self.enable[ctx][src]:
                     # if the treshold of the ctx allows interrupt from source 
-                    if self.priority[src] > self.threshold[ctx][src]:
+                    if self.priority[src] > self.threshold[ctx]:
                         # if context has already claimed an interrupt
-                        if self.serving_irq[ctx] != None:
+                        if self.claimed[ctx] != None:
                             source_pending = src
                             break
                         
             # set the bit in the mip of the context
             if source_pending>0:
-                self.ctx_list[ctx][0] = 1 # element 0 is the CsrReg MIP
+                self.ctx_list[ctx][0][self.ctx_list[ctx][1]] = 1 # element 0 is the CsrReg MIP
             else:
-                self.ctx_list[ctx][0] = 0
+                self.ctx_list[ctx][0][self.ctx_list[ctx][1]] = 0
         
     def read(self, addr, size = 4):
         return super().read(addr, size)
     
     def _claim(self, ctx: int)->int:
         # find best irq num
+        
+        if self.claimed[ctx]>0: # already claime
+            return 0
         
         best_priority = -1
         irq_id = 0
@@ -243,26 +246,29 @@ class InterruptController(BaseDevice):
             # if the source is enabled for the context
             if self.pending[src] and self.enable[ctx][src]:
                 # if the treshold of the ctx allows interrupt from source 
-                if self.priority[src] > self.threshold[ctx][src]:
+                if self.priority[src] >= self.threshold[ctx]:
                     if self.priority[src] > best_priority:
                         irq_id = src
                         best_priority = self.priority[src]
         
-        self.ctx_list[ctx] = irq_id 
-        self.update_logic()   
+        self.claimed[ctx] = irq_id 
+        self.update_logic()
+        log.debug(f"[PLIC] Context {ctx} claimed irq {irq_id}")
         return irq_id
         
     def _complete(self, src_num):
         
-        for i in range(len(self.serving_irq)):
-            if self.serving_irq[i] == src_num:
+        for i in range(len(self.claimed)):
+            if self.claimed[i] == src_num:
                 # if src id match one serving interrupt, 
                 # than clear it so more pending can happend
-                self.serving_irq[i] = 0
+                self.claimed[i] = 0
+                self.pending[src_num] = 0
+                log.debug(f"[PLIC] irq {src_num} completed!")
         self.update_logic()
         
     
-    def read(self, addr, size):
+    def read(self, addr, size=4):
         
         if addr<self.PENDING_BASE: # proprity section
             src = addr>>2 # every source proprity is 4 byte aligned 
@@ -271,22 +277,21 @@ class InterruptController(BaseDevice):
                 # 0x7 -> 8 level of priprity allowed
                 return self.priority[src]
         
-        elif self.ENABLE_BASE<=addr<self.PENDING_BASE: # pending
-            addr = addr-self.ENABLE_BASE
+        elif self.PENDING_BASE<=addr<self.ENABLE_BASE: # pending
+            addr = addr-self.PENDING_BASE
             
             src_idx_line = addr>>2 # every address can hold 32 interrupt sources
-            
             pending_total = 0
             # return a number capable or reading a 1, 2, 4, 8 byte long number
             for i in range(size*8):
                 src = src_idx_line * 32 + i
-                if src>self.num_sources:
+                if src>=self.num_sources:
                     break
                 pending_total += int(self.pending[src]>0) << i
             return pending_total
 
-        elif self.PENDING_BASE<=addr<self.CLAIM_BASE: # enables
-            addr = addr-self.PENDING_BASE
+        elif self.ENABLE_BASE<=addr<self.THRES_CLAIM_BASE: # enables
+            addr = addr-self.ENABLE_BASE
             
             ctx = addr // 0x80
             if ctx>=len(self.ctx_list):
@@ -298,13 +303,15 @@ class InterruptController(BaseDevice):
             # return a number capable or reading a 1, 2, 4, 8 byte long number
             for i in range(size*8):
                 src = src_idx_line * 32 + i
-                if src>self.num_sources:
+                if src>=self.num_sources:
                     break
+                # print('ctx', ctx)
+                # print('src', src)
                 enable_total += int(self.enable[ctx][src]>0) << i
             return enable_total
         
-        elif self.CLAIM_BASE<=addr<self.size:
-            addr = addr-self.CLAIM_BASE
+        elif self.THRES_CLAIM_BASE<=addr<self.size:
+            addr = addr-self.THRES_CLAIM_BASE
             
             ctx = addr // 0x1000
             if ctx>=len(self.ctx_list):
@@ -312,14 +319,14 @@ class InterruptController(BaseDevice):
             
             # check the memory address num
             reg_cond = ((addr-ctx*0x1000)>>2)
-            
             if reg_cond == 0:
                 # priority
                 return self.threshold[ctx]
             elif reg_cond == 1:
                 # claim/complete memory addr
                 return self._claim(ctx)
-        
+
+            return 0
         self.update_logic()
         return 0
         
@@ -334,8 +341,8 @@ class InterruptController(BaseDevice):
                 # 0x7 -> 8 level of priprity allowed
                 self.priority[src] = value & 0x7
         
-        elif self.PENDING_BASE<=addr<self.CLAIM_BASE: # pending
-            addr = addr-self.PENDING_BASE
+        elif self.ENABLE_BASE<=addr<self.THRES_CLAIM_BASE: # pending
+            addr = addr-self.ENABLE_BASE
             
             ctx = addr // 0x80
             
@@ -345,8 +352,8 @@ class InterruptController(BaseDevice):
                 src = src_idx_line * 32 + i
                 self.enable[ctx][src] = (value>>i) & 0x1
 
-        elif self.CLAIM_BASE<=addr<self.size:
-            addr = addr-self.CLAIM_BASE
+        elif self.THRES_CLAIM_BASE<=addr<self.size:
+            addr = addr-self.THRES_CLAIM_BASE
             
             ctx = addr // 0x1000
             

@@ -75,7 +75,10 @@ class SystemInterface():
         for i, (start, end) in enumerate(self.mem_map):
             out.append(f"* 0x{start:08X} - 0x{end:08X} = {self.dev_map[start].name}")
         
-        max_len = max([len(s) for s in out])
+        if len(out)==0:
+            out = ['empty'] 
+        
+        max_len = max([len(s) for s in out]+[len(head)])
         half_head_len = int((max_len-len(head))/2)
         
         out.append("="*max_len)
