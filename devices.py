@@ -157,18 +157,18 @@ class CLINT(BaseDevice):
     
     # standard timer interrupt bit in MIP csr
     MTIP = 7
-    STIP = 5
+    # STIP = 5
     
     # standard software interrupt bit in MIP csr
     MSIP = 3
-    SSIP = 1
+    # SSIP = 1
     
     BASE_MSIP = 0x0
     BASE_MTIMECMP = 0x4000
     BASE_MTIME = 0xBFF8 
     
     def __init__(self):
-        super().__init__(size=0xC000, name="CLINT")
+        super().__init__(size=0x10000, name="CLINT")
             
         self.num_harts : int = 0
         self.hart_mip : List[CsrReg] = []
@@ -269,7 +269,7 @@ class InterruptController(BaseDevice):
             context_num: int, 
             interrupt_source_num: int,
         ):
-        super().__init__(size=0x40_0000, name="PLIC")
+        super().__init__(size=0x400_0000, name="PLIC")
         
         self.num_sources = interrupt_source_num + 1 
         # every context is assigned to a MIP, MIE and xEIP bit position 
@@ -282,6 +282,7 @@ class InterruptController(BaseDevice):
 
     def set_interrupt(self, irq_source):
         self.pending[irq_source] = 1
+        print("Set Interrupt {}".format(irq_source))
         self.update_logic()
     
     def register_context(self, hart: 'RV64Hart', bit: int)->int:

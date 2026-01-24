@@ -750,11 +750,11 @@ class RV64Hart():
         return True
 
 
-"""
-RISCV_TEST = 1
-DEBUG = 0
-FREERUN = 1
-CONSOLE = 0
+
+RISCV_TEST = 0
+DEBUG = 1
+FREERUN = 0
+CONSOLE = 1
 
 csr = CsrFile()
 
@@ -774,9 +774,18 @@ length = [len(str(t.stem)) for t in tests]
 # ref : https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
 
 
-# tests = [Path("xv6-riscv/kernel.bin")]
+tests = [Path("opensbi/bin/fw_jump.bin")]
 
 # tests = [tests[0]]
+
+
+CLINT_BASE = 0x0200_000
+PLIC_BASE = 0x0c00_0000
+UART_BASE = 0x1000_0000
+RAM_BASE = 0x8000_0000
+
+MEIP_BIT = 11
+SEIP_BIT = 9
 
 for test in tests:
     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", 
@@ -785,23 +794,23 @@ for test in tests:
     if CONSOLE:
         uart = UART16550()
     ram = MemoryDevice.from_binary_file(test, "RAM")
-    ram.expand(0x10000)
+    ram.expand(0x30000)
     
     # clint = CLINT()
-    clint = CLINT(0x100)
+    clint = CLINT()
     plic = InterruptController(context_num=2, interrupt_source_num=31)
     
     
     
     sys_bus = SystemInterface()
     
-    sys_bus.register_device(clint, 0x200_0000)
-    sys_bus.register_device(plic, 0xc00_0000)
+    sys_bus.register_device(clint, CLINT_BASE)
+    sys_bus.register_device(plic, PLIC_BASE)
     
     if CONSOLE:
-        sys_bus.register_device(uart, 0x1000_0000)
+        sys_bus.register_device(uart, UART_BASE)
         
-    sys_bus.register_device(ram, 0x8000_0000)
+    sys_bus.register_device(ram, RAM_BASE)
     
     # print(sys_bus)
     if CONSOLE:
@@ -817,18 +826,18 @@ for test in tests:
 
     break_debug=True
     
-    m_ctx = plic.register_context(hart=h0, bit=11)
-    
-    # print(plic.ctx_list[0][0])
-    # print(plic.ctx_list[0][1])
+    h0_m_ctx_plic = plic.register_context(hart=h0, bit=MEIP_BIT)
+    h0_s_ctx_plic = plic.register_context(hart=h0, bit=SEIP_BIT)
     
     
     # break
     try:
         while(h0.step() and break_debug):
+            
             if DEBUG and not FREERUN:
                 while True: # Debugger
                     cmd = input("> ")
+                    clint.inc_time()
                     cmd : List[str] = [c.lower() for c in cmd.strip().split(" ")]
                     
                     if cmd[0]=="q" or cmd[0]=="quit":
@@ -901,7 +910,8 @@ for test in tests:
                                 print(h0.csr[h0.csr.name_to_addr[cmd[1]]])
                         except KeyError:
                             print(f"{cmd[1]} not a valid csr" )   
-            else: pass
+            else: 
+                clint.inc_time()
     except KeyboardInterrupt:       
         print("Keyboard Interrupt")
     finally:
@@ -919,9 +929,5 @@ for test in tests:
     else:
         print(f"{COL['g']} sys_code = {syscall_code}, sys_data = {syscall_data}, ")
     
-    del h0, ram, sys_bus 
+    del h0, ram, sys_bus
     
-    
-
-
-"""
