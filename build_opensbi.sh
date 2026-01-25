@@ -1,0 +1,1 @@
+make PLATFORM=generic FW_JUMP=y FW_TEXT_START=0x80000000 FW_JUMP_OFFSET=0x200000  ARCH=riscv CROSS_COMPILE=riscv64-unknown-linux-gnu- FW_FDT_PATH=/home/davide/projects/riscv/riscv_sim_py/device_tree/platform.dtb

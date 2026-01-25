@@ -10,3 +10,4 @@ scratchpad/
 opensbi/
 # compile_dt.sh
 copy_opensbi.sh
+custom/

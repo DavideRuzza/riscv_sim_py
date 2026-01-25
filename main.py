@@ -224,6 +224,8 @@ class RV64Hart():
      
     def step(self):
         
+        if sys_bus.is_locked():
+            return True
         # ---------------------------- FETCH --------------------------------- #
         ins = BlockReg(32, self.sys_bus.read(self.pc), INSTR_BLK_MAP)
         
@@ -486,7 +488,7 @@ class RV64Hart():
         # ---------------------------- EXECUTE ------------------------------- #
         
         if op in [Ops.JAL, Ops.OP, Ops.OP_32, Ops.OP_IMM, Ops.JALR,
-                    Ops.OP_IMM_32, Ops.AUIPC, Ops.LUI, Ops.LOAD ]:
+                    Ops.OP_IMM_32, Ops.AUIPC, Ops.LUI, Ops.LOAD, Ops.AMO]:
             self.write_back=True
         
         if op==Ops.ILLEGAL:
@@ -532,6 +534,71 @@ class RV64Hart():
             new_rd = u_imm
         elif op==Ops.MISC_MEM:
             pass
+        elif op==Ops.AMO:
+            
+            assert sys_bus.try_lock(self.hartid), 'AMO: hart {} could not lock the bus'.format(self.hartid)
+            size_byte = 1<<ins.I_f3
+            
+            amo_f5 = AMO_OP_F5(ins.I_f5)
+            
+            if amo_f5==AMO_OP_F5.LR:
+                val1 = sys_bus.load_reserve(r1&self.mask32, size_byte, self.hartid)
+            else:
+                val1 = sys_bus.read(r1&self.mask32, size_byte)
+            
+            val2 = r2
+            new_rd = sign_extend(val1&self.mask32, 32) if size_byte==4 else val1
+            
+            val1 = val1 & (1<<(size_byte*8))-1
+            val2 = val2 & (1<<(size_byte*8))-1
+                
+            if amo_f5==AMO_OP_F5.AMOSWAP:
+                amo_result = val2
+            elif amo_f5==AMO_OP_F5.AMOADD:
+                amo_result = val1 + val2
+            elif amo_f5==AMO_OP_F5.AMOAND:
+                amo_result = val1 & val2
+            elif amo_f5==AMO_OP_F5.AMOOR:
+                amo_result = val1 | val2
+            elif amo_f5==AMO_OP_F5.AMOXOR:
+                amo_result = val1 ^ val2
+            elif amo_f5==AMO_OP_F5.AMOMAX:
+                gt = to_signed(val1, size_byte*8)>to_signed(val2, size_byte*8)
+                amo_result = val1 if gt else val2
+            elif amo_f5==AMO_OP_F5.AMOMAXU:
+                gt = val1>val2
+                amo_result = val1 if gt else val2
+            elif amo_f5==AMO_OP_F5.AMOMIN:
+                gt = to_signed(val1, size_byte*8)<to_signed(val2, size_byte*8)
+                amo_result = val1 if gt else val2
+            elif amo_f5==AMO_OP_F5.AMOMINU:
+                gt = val1<val2
+                amo_result = val1 if gt else val2
+            elif amo_f5==AMO_OP_F5.LR:
+                pass
+            elif amo_f5==AMO_OP_F5.SC:
+                amo_result = val2
+            else:
+                raise Exception(f"{amo_f5} not defined")
+            
+            # sign extend if AMO.W operation
+            
+            
+            if amo_f5==AMO_OP_F5.SC:
+                valid_store = sys_bus.store_conditional(r1, amo_result, size_byte, self.hartid)
+                if valid_store:
+                    new_rd=0
+                else:
+                    new_rd=1
+                    self.inst_ret=False
+            elif amo_f5==AMO_OP_F5.LR:
+                pass
+            else:
+                amo_result = sign_extend(amo_result&self.mask32, 32) if size_byte==4 else amo_result
+                sys_bus.write(r1, amo_result, size_byte)
+                
+            sys_bus.unlock(self.hartid)
+            
         elif op==Ops.STORE:
             addr = ( r1 + s_imm) & self.mask64  
             if (addr == self.to_host_addr):
@@ -766,7 +833,7 @@ else:
 log = logging.getLogger(__name__)
 input_path = Path("tests/rv64/bin/p")
 
-tests = sorted(list(input_path.glob("rv64ui-p-*.bin")))
+tests = sorted(list(input_path.glob("rv64ua-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
 
@@ -774,7 +841,8 @@ length = [len(str(t.stem)) for t in tests]
 # ref : https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
 
 
-tests = [Path("opensbi/bin/fw_jump.bin")]
+# tests = [Path("opensbi/bin/fw_jump.bin")]
+tests = [Path("./tests/custom/hello.bin")]
 
 # tests = [tests[0]]
 
@@ -814,7 +882,7 @@ for test in tests:
     
     # print(sys_bus)
     if CONSOLE:
-        uart.shutdown()
+        uart.set_irq_callback(plic.set_interrupt)
     
     
     if RISCV_TEST:
@@ -824,16 +892,23 @@ for test in tests:
     
     h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
 
+    sys_bus.register_hart(hartid=0)
     break_debug=True
     
     h0_m_ctx_plic = plic.register_context(hart=h0, bit=MEIP_BIT)
     h0_s_ctx_plic = plic.register_context(hart=h0, bit=SEIP_BIT)
     
     
+    # wait for uart connection
+    if CONSOLE:
+        print("Waiting connection...")
+        while not uart.is_connected():
+            pass
+        
     # break
     try:
         while(h0.step() and break_debug):
-            
+            clint.inc_time()
             if DEBUG and not FREERUN:
                 while True: # Debugger
                     cmd = input("> ")
@@ -911,7 +986,8 @@ for test in tests:
                         except KeyError:
                             print(f"{cmd[1]} not a valid csr" )   
             else: 
-                clint.inc_time()
+                pass
+    
     except KeyboardInterrupt:       
         print("Keyboard Interrupt")
     finally:

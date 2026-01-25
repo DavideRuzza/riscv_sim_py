@@ -282,7 +282,7 @@ class InterruptController(BaseDevice):
 
     def set_interrupt(self, irq_source):
         self.pending[irq_source] = 1
-        print("Set Interrupt {}".format(irq_source))
+        # print("Set Interrupt {}".format(irq_source))
         self.update_logic()
     
     def register_context(self, hart: 'RV64Hart', bit: int)->int:

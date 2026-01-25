@@ -120,6 +120,20 @@ class FP_OP_F5(Enum):
     FCLASS = 0b11100
     FMVT_W_X = 0b11110
 
+class AMO_OP_F5(Enum):
+    LR =         0b00010
+    SC =         0b00011
+    AMOSWAP =    0b00001
+    AMOADD =     0b00000
+    AMOXOR =     0b00100
+    AMOAND =     0b01100
+    AMOOR =      0b01000
+    AMOMIN =     0b10000
+    AMOMAX =     0b10100
+    AMOMINU =    0b11000
+    AMOMAXU =    0b11100
+    
+    
 class FP_CMP_F3(Enum):
     EQ = 0b010
     LT = 0b001
