@@ -189,6 +189,7 @@ class CLINT(BaseDevice):
         
         for i in range(self.num_harts):
             if self.mtimecmp[i] < self.mtime:
+                print(f"hart {i} has timer interrupt")
                 self.timer_int_pending[i] = 1
                 self.hart_mip[i].MTIP = 1
             else:

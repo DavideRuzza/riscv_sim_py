@@ -84,6 +84,7 @@ class SYS_F12(Enum):
     EBREAK = 0x000
     MRET = 0x302
     SRET = 0x102
+    WFI = 0x105
     
 class OP_F3(Enum):
     ADD_SUB = 0b000
@@ -248,6 +249,19 @@ class Mode(Enum):
     H = 2
     M = 3
 
+class InterruptCode(Enum):
+    MachineSoftwareInterrupt=3
+    MachineTimerInterrupt=7
+    MachineExternalInterrupt=11
+    
+    SupervisorSoftwareInterrupt=1
+    SupervisorTimerInterrupt=5
+    SupervisorExternalInterrupt=9
+    
+    UserSoftwareInterrupt=0
+    UserTimerInterrupt=4
+    UserExternalInterrupt=8
+    
 class ExceptionCode(Enum):
     InstructionAddressMisaligned = 0
     InstructionAccessFault = 1

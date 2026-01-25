@@ -3,26 +3,25 @@
 / {
     #address-cells = <2>;
     #size-cells = <2>;
-    compatible = "riscv-custom";
-    model = "riscv-custom,generic";
+    compatible = "ucbbar,spike-bare-dev";
+    model = "ucbbar,spike-bare";
 
     chosen {
-        bootargs = "console=ttyS0,115200";
-        stdout-path = "/soc/serial@10000000";
+        bootargs = "";
     };
 
     cpus {
         #address-cells = <1>;
         #size-cells = <0>;
-        timebase-frequency = <10000000>; // 10 MHz, adjust as needed
+        timebase-frequency = <10000000>; // 10 MHz
 
         cpu0: cpu@0 {
             device_type = "cpu";
             reg = <0>;
             status = "okay";
             compatible = "riscv";
-            riscv,isa = "rv64imac"; // Adjust based on your CPU
-            clock-frequency = <100000000>; // 100 MHz, adjust as needed
+            riscv,isa = "rv64imac";
+            clock-frequency = <1000000000>; // 1 GHz
 
             cpu0_intc: interrupt-controller {
                 #interrupt-cells = <1>;
@@ -34,38 +33,32 @@
 
     memory@80000000 {
         device_type = "memory";
-        reg = <0x0 0x80000000 0x0 0x8000000>; // 128 MB, adjust as needed
+        reg = <0x0 0x80000000 0x0 0x8000000>; // 128 MB
     };
 
     soc {
         #address-cells = <2>;
         #size-cells = <2>;
-        compatible = "simple-bus";
+        compatible = "ucbbar,spike-bare-soc", "simple-bus";
         ranges;
 
         clint@2000000 {
-            compatible = "sifive,clint0", "riscv,clint0";
+            compatible = "riscv,clint0";
             reg = <0x0 0x2000000 0x0 0x10000>;
             interrupts-extended = <&cpu0_intc 3 &cpu0_intc 7>;
         };
 
         plic: interrupt-controller@c000000 {
-            compatible = "sifive,plic-1.0.0", "riscv,plic0";
+            compatible = "riscv,plic0";
             reg = <0x0 0xc000000 0x0 0x4000000>;
             #interrupt-cells = <1>;
             interrupt-controller;
             interrupts-extended = <&cpu0_intc 11 &cpu0_intc 9>;
-            riscv,ndev = <53>; // Number of interrupt sources, adjust as needed
+            riscv,ndev = <53>;
         };
+    };
 
-        uart0: serial@10000000 {
-            compatible = "ns16550a";
-            reg = <0x0 0x10000000 0x0 0x100>;
-            clock-frequency = <3686400>; // Adjust to your UART clock
-            interrupt-parent = <&plic>;
-            interrupts = <10>; // UART interrupt line, adjust as needed
-            reg-shift = <0>;
-            reg-io-width = <1>;
-        };
+    htif {
+        compatible = "ucb,htif0";
     };
 };

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 from FPU32 import FPU, pack_f32, pack_fflags, qNaNf
 from operators import alu
-from scratchpad.com import UART16550
+from com import UART16550
 
 def branch_unit(op1:int, op2:int, f3: BR_F3):
     if f3==BR_F3.BNE:
@@ -103,6 +103,8 @@ class RV64Hart():
         self.exception_list : List[ExceptionCode] = []
         self.to_host_addr = to_host_addr
         
+        self.wait_mode = False
+        
         # ------------- control variable value
         self.new_pc = 0
         self.write_back = False
@@ -145,7 +147,7 @@ class RV64Hart():
     def raiseException(self, e: ExceptionCode):
         self.exception_list.append(e)
         self.inst_ret = False
-        
+    
     def handleException(self):
         if len(self.exception_list)>0:
             e = self.exception_list.pop()
@@ -157,7 +159,7 @@ class RV64Hart():
 
             log.error(f"--- Exception : {e.name}, Handle: {"S" if deleg_cond else "M"} ---")
 
-            if deleg_cond:
+            if deleg_cond and self.mode!=Mode.M:
                 self.csr.sepc.all = self.pc
                 self.new_pc = self.csr.stvec.BASE<<2
                 
@@ -170,7 +172,7 @@ class RV64Hart():
                 self.csr.scause.CODE = e.value
                 self.csr.sstatus.SPP = self.mode.value
                 
-                self.mode = Mode.S
+                self.set_mode(Mode.S)
             else:
                 self.csr.mepc.all = self.pc
                 self.new_pc = self.csr.mtvec.BASE<<2
@@ -184,10 +186,150 @@ class RV64Hart():
                 self.csr.mcause.CODE = e.value
                 self.csr.mstatus.MPP = self.mode.value
                 
-                self.mode = Mode.M
+                self.set_mode(Mode.M)
 
         return True
 
+    def _find_highest_priority_interrupt(self, pending_mask, current_mode):
+        """
+        Find the highest priority pending interrupt.
+        RISC-V interrupt priority (high to low):
+        - MEI (11), MSI (3), MTI (7)  [Machine level]
+        - SEI (9), SSI (1), STI (5)  [Supervisor level]
+        
+        priority order:  MEI, MSI, MTI, SEI, SSI, STI, LCOFI
+        """
+        # Check in priority order
+        if current_mode == Mode.M:
+            priority_order = [11, 3, 7, 9, 1, 5]  # M interrupts first
+        else:
+            priority_order = [9, 1, 5]  # S-delegated interrupts only
+        
+        for interrupt_code in priority_order:
+            if (pending_mask >> interrupt_code) & 0b1:
+                return interrupt_code
+        
+        return None
+    
+    def handleInterrupts(self):
+        """
+        Handle pending interrupts based on current privilege mode and CSR settings.
+        Returns True if an interrupt was handled, False otherwise.
+        
+        Key behavior:
+        - M-mode interrupts can interrupt S-mode code regardless of SIE
+        - S-mode interrupts only interrupt S-mode code if delegated and SIE=1
+        - In M-mode, only handle if MIE=1
+        """
+        # Get pending interrupts from mip
+        mip = self.csr.mip._blocks['all'][:]
+        
+        # Get interrupt delegation - which interrupts are delegated to S mode
+        mideleg = self.csr.mideleg._blocks['all'][:]
+        
+        # Get interrupt enable flags
+        mie = self.csr.mie._blocks['all'][:]
+        sie = self.csr.sie._blocks['all'][:]
+        
+        if self.mode == Mode.M:
+            # In M mode: check if M-mode interrupts are globally enabled
+            mie_enabled = self.csr.mstatus.MIE  # MIE bit in mstatus
+            
+            if not mie_enabled:
+                return False
+            
+            # Handle M-mode interrupts (not delegated) that are pending and enabled
+            pending = mip & mie & ~mideleg
+        
+        else:  # S mode
+            # In S mode, we have two cases:
+            
+            # Case 1: M-mode interrupts (not delegated)
+            # These ALWAYS interrupt S mode, regardless of SIE
+            m_mode_pending = mip & mie & ~mideleg
+            
+            if m_mode_pending != 0:
+                # M-mode interrupt has priority, handle in M mode
+                interrupt_code = self._find_highest_priority_interrupt(m_mode_pending, Mode.M)
+                if interrupt_code is not None:
+                    self._take_interrupt(interrupt_code, Mode.M)
+                    return True
+            
+            # Case 2: S-mode delegated interrupts
+            # These only interrupt if SIE=1 in sstatus
+            sie_enabled = self.csr.sstatus.SIE  # SIE bit in sstatus
+            
+            if not sie_enabled:
+                return False
+            
+            # Handle S-mode delegated interrupts that are pending and enabled
+            pending = mip & sie & mideleg
+        
+        if pending == 0:
+            return False
+        
+        # Find highest priority interrupt
+        interrupt_code = self._find_highest_priority_interrupt(pending, self.mode)
+        
+        if interrupt_code is None:
+            return False
+        
+        self._take_interrupt(interrupt_code, self.mode)
+        
+        return True
+
+    def _take_interrupt(self, interrupt_code, target_mode):
+        """
+        Take an interrupt and switch to the target privilege mode.
+        """
+        mideleg = self.csr.mideleg.all
+        deleg_cond = (mideleg >> interrupt_code) & 0b1
+        
+        log.error(f"--- Interrupt: {InterruptCode(interrupt_code).name}, Handle: {"S" if deleg_cond else "M"} ---")
+        
+        if target_mode == Mode.S:
+            # Handle in S mode
+            self.csr.sepc.all = self.pc
+            self.new_pc = self.csr.stvec.BASE << 2
+            print(hex(self.new_pc))
+            # Check for vectored interrupts
+            if self.csr.stvec.MODE == 1:
+                log.error("--- Vectored ---")
+                self.new_pc += 4 * interrupt_code
+            
+            self.csr.scause.INT = 0b1  # This is an interrupt
+            self.csr.scause.CODE = interrupt_code
+            self.csr.sstatus.SPP = self.mode.value
+            
+            # Save the current SIE state to SPIE
+            self.csr.sstatus.SPIE = self.csr.sstatus.SIE
+            # Disable interrupts in S mode
+            self.csr.sstatus.SIE = 0b0
+            
+            self.mode = Mode.S
+        
+        else:  # M mode
+            # Handle in M mode
+            self.csr.mepc.all = self.pc
+            self.new_pc = self.csr.mtvec.BASE << 2
+            print(hex(self.new_pc))
+            # Check for vectored interrupts
+            if self.csr.mtvec.MODE == 1:
+                log.error("--- Vectored ---")
+                self.new_pc += 4 * interrupt_code
+            
+            self.csr.mcause.INT = 0b1  # This is an interrupt
+            self.csr.mcause.CODE = interrupt_code
+            self.csr.mstatus.MPP = self.mode.value
+            
+            # Save the current MIE state to MPIE
+            self.csr.mstatus.MPIE = self.csr.mstatus.MIE
+            # Disable interrupts in M mode
+            self.csr.mstatus.MIE = 0b0
+            
+            self.mode = Mode.M
+        self.wait_mode = False
+    
     def set_mode(self, mode: Mode):
         self.mode = mode
         
@@ -204,7 +346,6 @@ class RV64Hart():
         elif (mpp == 0b11):
             self.set_mode(Mode.M)
         
-        # print("IMPL", self.is_ext_impl(Ext.U))
         self.csr.mstatus.MPP = 0b00 if self.is_ext_impl(Ext.U) else 0b11
         return self.csr.mepc.all
     
@@ -226,6 +367,7 @@ class RV64Hart():
         
         if sys_bus.is_locked():
             return True
+        
         # ---------------------------- FETCH --------------------------------- #
         ins = BlockReg(32, self.sys_bus.read(self.pc), INSTR_BLK_MAP)
         
@@ -249,8 +391,16 @@ class RV64Hart():
         
         is_compressed = False
         
+        
+        if self.handleInterrupts():
+            print("int after pc", hex(self.new_pc))
+            self.pc = self.new_pc & self.mask64
+            return True
+        
+        if self.wait_mode:
+            return True
+        
         # ------------------------------ DECODE ------------------------------ #
-
 
         # ---------------- 16 bit to 32 bit stage translation ---------------- #
         
@@ -466,6 +616,7 @@ class RV64Hart():
         
         op = Ops(ins.opcode)
         if op==Ops.ILLEGAL: self.raiseException(ExceptionCode.IllegalInstruction)
+        
         self.handleException()
         log.info(f"{self.pc:08x} {op.name}")
                 
@@ -597,8 +748,7 @@ class RV64Hart():
                 amo_result = sign_extend(amo_result&self.mask32, 32) if size_byte==4 else amo_result
                 sys_bus.write(r1, amo_result, size_byte)
                 
-            sys_bus.unlock(self.hartid)
-            
+            sys_bus.unlock(self.hartid) 
         elif op==Ops.STORE:
             addr = ( r1 + s_imm) & self.mask64  
             if (addr == self.to_host_addr):
@@ -725,6 +875,9 @@ class RV64Hart():
                     if (self.mode==Mode.M): self.raiseException(ExceptionCode.Mcall)
                     elif (self.mode==Mode.S): self.raiseException(ExceptionCode.Scall)
                     elif (self.mode==Mode.U): self.raiseException(ExceptionCode.Ucall)
+                elif f12==SYS_F12.WFI:
+                    log.error("--WFI--")
+                    self.wait_mode = True
                 else:                    
                     log.error(f" {f12} Not Implemented")
                     return False
@@ -818,10 +971,11 @@ class RV64Hart():
 
 
 
-RISCV_TEST = 0
+RISCV_TEST = 1
+CUSTOM_TEST = 1
 DEBUG = 1
-FREERUN = 0
-CONSOLE = 1
+FREERUN = 1
+CONSOLE = 0
 
 csr = CsrFile()
 
@@ -842,12 +996,13 @@ length = [len(str(t.stem)) for t in tests]
 
 
 # tests = [Path("opensbi/bin/fw_jump.bin")]
-tests = [Path("./tests/custom/hello.bin")]
+# tests = [Path("./tests/custom/hello/hello.bin")]
+tests = [Path("./tests/custom/timer_interrupt/main.bin")]
 
 # tests = [tests[0]]
 
 
-CLINT_BASE = 0x0200_000
+CLINT_BASE = 0x0200_0000
 PLIC_BASE = 0x0c00_0000
 UART_BASE = 0x1000_0000
 RAM_BASE = 0x8000_0000
@@ -862,14 +1017,13 @@ for test in tests:
     if CONSOLE:
         uart = UART16550()
     ram = MemoryDevice.from_binary_file(test, "RAM")
-    ram.expand(0x30000)
+    ram.expand(0x800_0000)
     
     # clint = CLINT()
     clint = CLINT()
     plic = InterruptController(context_num=2, interrupt_source_num=31)
     
-    
-    
+
     sys_bus = SystemInterface()
     
     sys_bus.register_device(clint, CLINT_BASE)
@@ -886,17 +1040,23 @@ for test in tests:
     
     
     if RISCV_TEST:
-        to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
+        if CUSTOM_TEST:
+            to_host_addr = get_symbol_info(test.parent/(test.stem+".elf"), 'tohost')['address']
+        else:
+            to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
     else:
         to_host_addr=0
     
-    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F], to_host_addr=to_host_addr)
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F, Ext.A], to_host_addr=to_host_addr)
 
-    sys_bus.register_hart(hartid=0)
     break_debug=True
     
     h0_m_ctx_plic = plic.register_context(hart=h0, bit=MEIP_BIT)
     h0_s_ctx_plic = plic.register_context(hart=h0, bit=SEIP_BIT)
+    
+    clint.register_hart(h0)
+    
+    sys_bus.register_hart(hartid=0)
     
     
     # wait for uart connection
@@ -909,10 +1069,10 @@ for test in tests:
     try:
         while(h0.step() and break_debug):
             clint.inc_time()
+            log.error(clint.mtime)
             if DEBUG and not FREERUN:
                 while True: # Debugger
                     cmd = input("> ")
-                    clint.inc_time()
                     cmd : List[str] = [c.lower() for c in cmd.strip().split(" ")]
                     
                     if cmd[0]=="q" or cmd[0]=="quit":
@@ -999,7 +1159,10 @@ for test in tests:
     syscall_data = h0.regfile[10] 
     if syscall_code==93: # exit code
         if syscall_data == 0:
-            print(" ✅ Test PASSED")
+            if CUSTOM_TEST:
+                print(" ✅ End.")
+            else:
+                print(" ✅ Test PASSED")
         else:
             print(f" ❌ Test FAILED: {syscall_data>>1}")
     else:
