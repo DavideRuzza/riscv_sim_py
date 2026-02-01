@@ -81,7 +81,7 @@ class Ops_C(Enum):
     
 class SYS_F12(Enum):
     ECALL = 0x000
-    EBREAK = 0x000
+    EBREAK = 0x001
     MRET = 0x302
     SRET = 0x102
     WFI = 0x105
@@ -353,8 +353,8 @@ CSR_M = {
     # mtinst
     # mtval2
     
-    "pmpcfg0":  (0x3a0, 64, {}, {}, None),
-    "pmpaddr0": (0x3B0, 64, {}, {}, None),
+    # "pmpcfg0":  (0x3a0, 64, {}, {}, None),
+    # "pmpaddr0": (0x3B0, 64, {}, {}, None),
     
     "mnstatus": (0x744, 64, {}, {}, None),
     

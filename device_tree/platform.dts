@@ -21,8 +21,8 @@
             reg = <0>;
             status = "okay";
             compatible = "riscv";
-            riscv,isa = "rv64imac"; // Adjust based on your CPU
-            clock-frequency = <100000000>; // 100 MHz, adjust as needed
+            riscv,isa = "rv64imaf"; // Adjust based on your CPU
+            // clock-frequency = <100000000>; // 100 MHz, adjust as needed
 
             cpu0_intc: interrupt-controller {
                 #interrupt-cells = <1>;
@@ -34,7 +34,7 @@
 
     memory@80000000 {
         device_type = "memory";
-        reg = <0x0 0x80000000 0x0 0x8000000>; // 128 MB, adjust as needed
+        reg = <0x0 0x80000000 0x0 0x200000>; // 128 MB, adjust as needed
     };
 
     soc {
@@ -44,28 +44,34 @@
         ranges;
 
         clint@2000000 {
-            compatible = "sifive,clint0", "riscv,clint0";
+            compatible = "riscv,clint0";
             reg = <0x0 0x2000000 0x0 0x10000>;
             interrupts-extended = <&cpu0_intc 3 &cpu0_intc 7>;
         };
 
         plic: interrupt-controller@c000000 {
-            compatible = "sifive,plic-1.0.0", "riscv,plic0";
+            compatible = "riscv,plic0";
             reg = <0x0 0xc000000 0x0 0x4000000>;
             #interrupt-cells = <1>;
             interrupt-controller;
             interrupts-extended = <&cpu0_intc 11 &cpu0_intc 9>;
-            riscv,ndev = <53>; // Number of interrupt sources, adjust as needed
+            riscv,ndev = <30>; // Number of interrupt sources, adjust as needed
         };
 
-        uart0: serial@10000000 {
-            compatible = "ns16550a";
-            reg = <0x0 0x10000000 0x0 0x100>;
-            clock-frequency = <3686400>; // Adjust to your UART clock
+        // uart0: serial@10000000 {
+        //     compatible = "ns16550a";
+        //     reg = <0x0 0x10000000 0x0 0x100>;
+        //     reg-shift = <0>;
+        //     clock-frequency = <3686400>;
+        //     current-speed = <115200>;
+        // };
+
+        uart0@10000000 {
+            clock-frequency = <0x1000000>;
+            reg = <0x00 0x10000000 0x00 0x100>;
+            compatible = "ns16550";
             interrupt-parent = <&plic>;
-            interrupts = <10>; // UART interrupt line, adjust as needed
-            reg-shift = <0>;
-            reg-io-width = <1>;
+            interrupts = <10>;
         };
     };
 };

@@ -290,16 +290,13 @@ class RegFile:
                 dump_str+="%3s: %016x " % (name, self.reg_file[i])
             else:
                 dump_str+="%3s: %08x " % (name, self.reg_file[i])
-        print(dump_str
-        )
+        print(dump_str)
         
     def __str__(self):
         dump_str=""
         for i , name in zip(range(self.n_regs), self.reg_names):
             if (i)%4 == 0 and i>0:
                 dump_str += '\n'
-            if i>15:
-                break
             if self.bus_size == 64:
                 dump_str+="%3s: %016x " % (name, self.reg_file[i])
             else:

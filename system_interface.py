@@ -60,19 +60,19 @@ class SystemInterface():
         # TODO: optimize the whole function @DavideRuzza 
         
         assert dev not in self.dev_list, f"'{dev.name}' already registered"
-        
+        # print("adding", dev)
         index = 0
         for i, addr in enumerate(self.mem_map):
-            
+            # print(f"dev | {self.dev_list[i].name:<15}: {hex(addr[0])} - {hex(addr[1])}")
             if start_address<addr[0]:
                 index = i
             elif start_address>addr[1]:
                 index = i+1
             
             if (addr[0]<=start_address<=addr[1]) or \
-                (addr[0]<=start_address+dev.size<=addr[1]):
+                (addr[0]<=start_address+dev.size-1<=addr[1]):
                 raise Exception(f"address overlap with {self.dev_list[i].name}")
-        
+        # print("----")
         self.dev_list.insert(index, dev)
         self.mem_map.insert(index, [start_address, start_address+dev.size-1])
         self.dev_map = {}

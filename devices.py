@@ -34,13 +34,59 @@ class BaseDevice:
         return f"{self.__class__.__name__}(name={self.name}, size={self.size:x})"
 
 
+import mmap
 
 class MemoryDevice(BaseDevice):
     
     def __init__(self, size, name="dev"):
         self.size : int = size
         self.name : str = name
-        self.mem : bytearray = b'\x00'*self.size
+        self.mem : bytearray = bytearray() #b'\x00'*self.size
+
+        self.tmpfile = f"./tmp/{name}_mem.bin"
+        
+        # Create file and map it
+        with open(self.tmpfile, 'wb') as f:
+            f.write(b'\x00' * size)
+        
+        self.file = open(self.tmpfile, 'r+b')
+        self.mem = mmap.mmap(self.file.fileno(), size)
+        
+    # @classmethod
+    # def from_binary_file(
+    #         cls: 'BaseDevice', 
+    #         filepath: str, 
+    #         name='dev') -> 'MemoryDevice':
+        
+    #     with open(filepath, 'rb') as f:
+    #         data = f.read()
+        
+    #     size = len(data)
+    #     round_size = cls.round4Kb(len(data))
+    #     newdev = cls(size=round_size, name=name)
+    #     data = data+b'\x00'*(round_size-size)
+    #     newdev.mem = data
+
+    #     return newdev
+    
+    # def read(self, addr: int, size: int = 4) -> int:
+    #     assert addr>=0, "something is wrong addr < 0" 
+    #     assert addr+size<=self.size-1, \
+    #         f"addr: {hex(addr+size)} is more than dev size"
+        
+    #     enc_str = self.get_encoding(size)
+    #     return unpack(enc_str, self.mem[addr:addr+size])[0]
+    
+    # def write(self, addr: int, value: int, size: int = 4):
+        
+    #     assert addr>=0, "something is wrong addr < 0" 
+    #     assert addr+size<=self.size-1, \
+    #         f"addr: {hex(addr+size)} is more than dev size"
+        
+    #     mask = (1<<(size*8))-1
+    #     enc_str = self.get_encoding(size)
+    #     data = pack(enc_str, value&mask)
+    #     self.mem = self.mem[:addr] + data + self.mem[addr+size:]
     
     @classmethod
     def from_binary_file(
@@ -51,33 +97,25 @@ class MemoryDevice(BaseDevice):
         with open(filepath, 'rb') as f:
             data = f.read()
         
-        size = len(data)
         round_size = cls.round4Kb(len(data))
         newdev = cls(size=round_size, name=name)
-        data = data+b'\x00'*(round_size-size)
-        newdev.mem = data
-
-        return newdev
-    
-    def read(self, addr: int, size: int = 4) -> int:
-        assert addr>=0, "something is wrong addr < 0" 
-        assert addr+size<=self.size-1, \
-            f"addr: {hex(addr+size)} is more than dev size"
+        newdev.mem[:len(data)] = data  # Slice assignment is fast
         
+        return newdev
+
+    def read(self, addr: int, size: int = 4) -> int:
+        assert addr>=0 and addr+size<=self.size
         enc_str = self.get_encoding(size)
         return unpack(enc_str, self.mem[addr:addr+size])[0]
     
     def write(self, addr: int, value: int, size: int = 4):
-        
-        assert addr>=0, "something is wrong addr < 0" 
-        assert addr+size<=self.size-1, \
-            f"addr: {hex(addr+size)} is more than dev size"
-        
+        assert addr>=0 and addr+size<=self.size
         mask = (1<<(size*8))-1
         enc_str = self.get_encoding(size)
         data = pack(enc_str, value&mask)
-        self.mem = self.mem[:addr] + data + self.mem[addr+size:]
-    
+        self.mem[addr:addr+size] = data
+
+        
     @staticmethod
     def round4Kb(n: int) -> int:
         return ((n + 4095) // 4096) * 4096
@@ -140,12 +178,32 @@ class MemoryDevice(BaseDevice):
         else:
             return f"{s:.1f}b"
         
+    # def expand(self, end: int):
+    #     new_size = self.round4Kb(end+self.size)
+    #     data = self.mem+b'\x00'*(new_size-self.size)
+    #     self.size = new_size
+    #     self.mem = data
+    
     def expand(self, end: int):
-        new_size = self.round4Kb(end+self.size)
-        data = self.mem+b'\x00'*(new_size-self.size)
-        self.size = new_size
-        self.mem = data
+        new_size = self.round4Kb(end)
+        if new_size <= self.size:
+            return  # Already large enough
         
+        # For mmap: close old, create new larger file
+        old_mem = self.mem[:]  # Copy existing data
+        self.mem.close()
+        self.file.close()
+        
+        # Create new larger file
+        with open(self.tmpfile, 'r+b') as f:
+            f.seek(self.size)
+            f.write(b'\x00' * (new_size - self.size))
+        
+        # Remap
+        self.file = open(self.tmpfile, 'r+b')
+        self.mem = mmap.mmap(self.file.fileno(), new_size)
+        self.size = new_size
+                
     def __repr__(self):
         return f"{self.__class__.__name__}(name={self.name}, size={self.size_str()})"
  
@@ -189,18 +247,18 @@ class CLINT(BaseDevice):
         
         for i in range(self.num_harts):
             if self.mtimecmp[i] < self.mtime:
-                print(f"hart {i} has timer interrupt")
+                # print(f"hart {i} has timer interrupt")
                 self.timer_int_pending[i] = 1
-                self.hart_mip[i].MTIP = 1
+                self.hart_mip[i]._blocks['MTIP'].val = 1
             else:
                 self.timer_int_pending[i] = 0
-                self.hart_mip[i].MTIP = 0
+                self.hart_mip[i]._blocks['MTIP'].val = 0
                 
         for i in range(self.num_harts):
             if self.software_int_pending[i] > 0:
-                self.hart_mip[i].MSIP = 1
+                self.hart_mip[i]._blocks['MSIP'].val = 1
             else:
-                self.hart_mip[i].MSIP = 0
+                self.hart_mip[i]._blocks['MSIP'].val = 0
         
         
     def register_hart(self, hart = 'RV64Hart'):
@@ -247,7 +305,7 @@ class CLINT(BaseDevice):
             addr -= self.BASE_MTIMECMP
             hart_id = addr>>2
             if hart_id<self.num_harts:
-                print("mtime_cmp h{}".format(hart_id), value)
+                # print("mtime_cmp h{}".format(hart_id), value)
                 self.mtimecmp[hart_id] = value
             
         elif addr == self.BASE_MTIME:
@@ -270,7 +328,7 @@ class InterruptController(BaseDevice):
             context_num: int, 
             interrupt_source_num: int,
         ):
-        super().__init__(size=0x400_0000, name="PLIC")
+        super().__init__(size=0x40_0000, name="PLIC")
         
         self.num_sources = interrupt_source_num + 1 
         # every context is assigned to a MIP, MIE and xEIP bit position 

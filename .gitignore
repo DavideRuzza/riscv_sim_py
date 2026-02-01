@@ -7,7 +7,9 @@ xv6-riscv
 FPU_WIP_old.py
 *.ipynb
 scratchpad/
-opensbi/
+# opensbi/
+opensbi/spike
+opensbi/opensbi-main
 # compile_dt.sh
 copy_opensbi.sh
-custom/
+tmp/

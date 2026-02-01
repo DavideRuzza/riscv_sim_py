@@ -9,6 +9,7 @@ from typing import List, Dict, Tuple
 from FPU32 import FPU, pack_f32, pack_fflags, qNaNf
 from operators import alu
 from com import UART16550
+import traceback
 
 def branch_unit(op1:int, op2:int, f3: BR_F3):
     if f3==BR_F3.BNE:
@@ -112,7 +113,9 @@ class RV64Hart():
         self.to_float_reg = False
         self.inst_ret = True
         self.cnt_cycle = True
-        self.breakpoint_addr = 0# 0x8000_01fc
+        self.breakpoint_addr = -1 # 0x8000_01fc
+        self.store_breakpoint_addr = -1
+        self.load_breakpoint_addr = -1
         
         # ------------- SETUP CSR
         self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
@@ -140,6 +143,12 @@ class RV64Hart():
 
     def set_breakpoint(self, brkpt):
         self.breakpoint_addr=brkpt
+    
+    def set_store_breakpoint(self, brkpt):
+        self.store_breakpoint_addr=brkpt
+        
+    def set_load_breakpoint(self, brkpt):
+        self.load_breakpoint_addr=brkpt
         
     def is_ext_impl(self, e: Ext):
         return (e in self.ext_list)
@@ -151,7 +160,7 @@ class RV64Hart():
     def handleException(self):
         if len(self.exception_list)>0:
             e = self.exception_list.pop()
-            
+            # print(f"code {e}, pc 0x{hex(self.pc)}")
             medeleg = self.csr.medeleg.all
             
             # check if the exception is delegated to S mode
@@ -233,7 +242,7 @@ class RV64Hart():
         
         if self.mode == Mode.M:
             # In M mode: check if M-mode interrupts are globally enabled
-            mie_enabled = self.csr.mstatus.MIE  # MIE bit in mstatus
+            mie_enabled = self.csr.mstatus._blocks['MIE'].val  # MIE bit in mstatus
             
             if not mie_enabled:
                 return False
@@ -369,6 +378,7 @@ class RV64Hart():
             return True
         
         # ---------------------------- FETCH --------------------------------- #
+        log.debug(" - - - - - - - - - - ")
         ins = BlockReg(32, self.sys_bus.read(self.pc), INSTR_BLK_MAP)
         
         pc_plus_4 = self.pc+4
@@ -398,6 +408,7 @@ class RV64Hart():
             return True
         
         if self.wait_mode:
+            log.error(f"-- WFI at {self.pc:08x}", )
             return True
         
         # ------------------------------ DECODE ------------------------------ #
@@ -422,7 +433,7 @@ class RV64Hart():
                 log.warning(c_opcode)
                 
                 # is_op_imm=False
-                if   c_opcode==Ops_C.ADDI4SPN:
+                if c_opcode==Ops_C.ADDI4SPN:
                     i_imm = (ins_c[12:11]<<4) | (ins_c[10:7]<<6) | (ins_c[6]<<2) | (ins_c[5]<<3)
                     new_ins.I_rd = ins_c.C0_rd_prime+base_reg # from stack pointer
                     new_ins.I_rs1 = 2 # from stack pointer
@@ -564,9 +575,10 @@ class RV64Hart():
                     new_ins.opcode=Ops.JAL.value
                     new_ins.I_rd = 0
                 elif c_opcode in [Ops_C.BEQZ, Ops_C.BNEZ]:
-                    b_imm=(ins_c[12]<<8)|(ins_c[11:10]<<3)|(ins_c[6:5]<<6)|\
-                        (ins_c[4:3]<<1)|(ins_c[2]<<5)
-                    b_imm=sign_extend(b_imm, 12)
+                    
+                    b_imm=(ins_c[12]<<8)|(ins_c[11:10]<<3)|(ins_c[6:5]<<6)|(ins_c[4:3]<<1)|(ins_c[2]<<5)
+                    b_imm=sign_extend(b_imm, 8)
+                    # print("debuuugg: ", hex(b_imm), bin(b_imm), bin(ins_c[12:10]), bin(ins_c[6:2]),  int_64(b_imm))
                     new_ins.opcode = Ops.BRANCH.value
                     new_ins.I_f3 = BR_F3.BEQ.value if c_opcode==Ops_C.BEQZ else BR_F3.BNE.value
                     new_ins.I_rd = 0
@@ -754,7 +766,9 @@ class RV64Hart():
             if (addr == self.to_host_addr):
                 log.error("__to_host__")
                 return False
-            self.sys_bus.write(addr, r2, 1<<ins.I_f3)
+            if (addr == self.store_breakpoint_addr):
+                self.breakpoint_addr=self.pc
+            self.sys_bus.write(addr, r2, 1<<ins.I_f3)           
         elif op==Ops.LOAD:
             addr = ( r1 + i_imm) & self.mask64
             # LBU, LHU, LWU are just the same but with the bit 0b100
@@ -765,11 +779,13 @@ class RV64Hart():
                 self.raiseException(ExceptionCode.LoadAddressMisaligned)
                 self.write_back = False
             else:
+                if (addr == self.load_breakpoint_addr):
+                    self.breakpoint_addr=self.pc
                 new_rd = self.sys_bus.read(addr, size_byte)
                 f3_l = LD_F3(ins.I_f3)
                 # print(size_byte)
                 if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
-                    new_rd = sign_extend(new_rd, size_byte*8)
+                    new_rd = sign_extend(new_rd, size_byte*8)                   
         elif op==Ops.LOAD_FP:
             addr = ( r1 + i_imm) & self.mask64   
             # 010 (2) for W; 011 (3) for D; 100 (4) for Q; 
@@ -782,7 +798,9 @@ class RV64Hart():
             if (addr == self.to_host_addr):
                 log.error("__to_host__")
                 return False
-            self.sys_bus.write(addr, fpr2, 1<<ins.I_f3)  
+            if (addr == self.store_breakpoint_addr):
+                self.breakpoint_addr=self.pc
+            self.sys_bus.write(addr, fpr2, 1<<ins.I_f3)           
         elif op in [Ops.FMADD, Ops.FNMADD]:
             f_f3 = ins.I_f3
             res1, fflags1 = FPU(fpr1, fpr2, FP_OP_F5.FMUL, f_f3, ins.I_rs2)
@@ -875,53 +893,67 @@ class RV64Hart():
                     if (self.mode==Mode.M): self.raiseException(ExceptionCode.Mcall)
                     elif (self.mode==Mode.S): self.raiseException(ExceptionCode.Scall)
                     elif (self.mode==Mode.U): self.raiseException(ExceptionCode.Ucall)
+                elif f12==SYS_F12.EBREAK:
+                    log.error("--EBREAK--")
+                    # TODO: implement debugger for FPGA @DavideRuzza
                 elif f12==SYS_F12.WFI:
                     log.error("--WFI--")
                     self.wait_mode = True
                 else:                    
                     log.error(f" {f12} Not Implemented")
                     return False
-            else:
+            else: # CSR
                 f3 = CSR_F3(ins.I_f3)
                 csr_key = ins.I_f12
                 new_csr = None
                 # read csr if the mode allows
                 
-                csr = self.csr[csr_key]
-                if csr.priv.value <= self.mode.value:
-                    csr_value = csr.all
-                    new_rd = csr_value
-                    self.write_back = True
                 
-                    # immediate csr instruction differs from the 2 bit in f3
-                    # for I instruction instead of the content of r1 they use 
-                    # r1 position as immediate
-                    is_imm_csr = bool(f3.value>>2)
-                    value = ins.I_rs1 if is_imm_csr else r1
+                csr_implemented = True 
+                try:
+                    csr = self.csr[csr_key]
+                except KeyError:
+                    csr_implemented = False
+                
+                if csr_implemented:
+                    if csr.priv.value <= self.mode.value:
+                        csr_value = csr.all
+                        new_rd = csr_value
+                        self.write_back = True
                     
-                    csrsrc_cond = (not is_imm_csr and (ins.I_rs1 != 0)) or \
-                                    (is_imm_csr and value != 0)
-                                    
-                    if (f3 == CSR_F3.CSRRS) or (f3 == CSR_F3.CSRRSI):
-                        log.info("CSRRS")
-                        if csrsrc_cond:
-                            new_csr = csr_value | value
-                            self.write_csr = True
-                    elif (f3 == CSR_F3.CSRRC) or (f3 == CSR_F3.CSRRCI):
-                        log.info("CSRRC")
-                        if csrsrc_cond:
-                            clear_bit_mask = (~value) & self.mask64
-                            new_csr = csr_value & clear_bit_mask
-                            self.write_csr = True  
-                    elif (f3 == CSR_F3.CSRRW) or (f3 == CSR_F3.CSRRWI):
-                        log.info("CSRRW")
-                        new_csr = value
-                        self.write_csr = True    
+                        # immediate csr instruction differs from the 2 bit in f3
+                        # for I instruction instead of the content of r1 they use 
+                        # r1 position as immediate
+                        is_imm_csr = bool(f3.value>>2)
+                        value = ins.I_rs1 if is_imm_csr else r1
+                        
+                        csrsrc_cond = (not is_imm_csr and (ins.I_rs1 != 0)) or \
+                                        (is_imm_csr and value != 0)
+                                        
+                        if (f3 == CSR_F3.CSRRS) or (f3 == CSR_F3.CSRRSI):
+                            log.info("CSRRS")
+                            if csrsrc_cond:
+                                new_csr = csr_value | value
+                                self.write_csr = True
+                        elif (f3 == CSR_F3.CSRRC) or (f3 == CSR_F3.CSRRCI):
+                            log.info("CSRRC")
+                            if csrsrc_cond:
+                                clear_bit_mask = (~value) & self.mask64
+                                new_csr = csr_value & clear_bit_mask
+                                self.write_csr = True  
+                        elif (f3 == CSR_F3.CSRRW) or (f3 == CSR_F3.CSRRWI):
+                            log.info("CSRRW")
+                            new_csr = value
+                            self.write_csr = True    
+                        else:
+                            raise Exception(f'CSR OP {f3} not defined')
                     else:
-                        raise Exception(f'CSR OP {f3} not defined')
+                        log.error("not enough priviledge")
+                        self.raiseException(ExceptionCode.IllegalInstruction)
                 else:
-                    log.error("not enough priviledge")
+                    log.error(f"csr 0x{hex(csr_key)} not implemented")
                     self.raiseException(ExceptionCode.IllegalInstruction)
+                    
         else:
             # raise Exception(f"{op} not implemented")
             log.error("Not Implemented")
@@ -963,6 +995,7 @@ class RV64Hart():
         if self.pc==self.breakpoint_addr:
             log.error("-- Breakpoint --")
             print(f"self.new_pc: 0x{(self.new_pc & self.mask64):8x}")
+            self.pc = self.new_pc & self.mask64
             return False
         
         self.pc = self.new_pc & self.mask64
@@ -970,35 +1003,51 @@ class RV64Hart():
         return True
 
 
+# ---- settings
+RISCV_TEST = 0
+CUSTOM_TEST = 0
 
-RISCV_TEST = 1
-CUSTOM_TEST = 1
-DEBUG = 1
-FREERUN = 1
-CONSOLE = 0
+VERBOSE = 0
+DEBUG = 0
 
+CONSOLE = 1
+PROFILE = 0
+
+
+VERBOSE_LEVEL = None
 csr = CsrFile()
 
-if DEBUG:
+# ----------------------------------- VERBOSE setup
+def set_log_level(new_level):
+    """Change logging level at any point"""
+    logger = logging.getLogger()
+    logger.setLevel(new_level)
+    for handler in logger.handlers:
+        handler.setLevel(new_level)
+        
+log = logging.getLogger(__name__)
+
+if VERBOSE:
     setup_logging(logging.DEBUG)
+    VERBOSE_LEVEL = logging.DEBUG
 else:
     setup_logging(logging.CRITICAL)
+    VERBOSE_LEVEL = logging.CRITICAL
+# ------------------------------------
 
-log = logging.getLogger(__name__)
 input_path = Path("tests/rv64/bin/p")
-
-tests = sorted(list(input_path.glob("rv64ua-p-*.bin")))
+  
+        
+tests = sorted(list(input_path.glob("rv64uc-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
-
 
 # ------------------------------ memory map
 # ref : https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
 
 
-# tests = [Path("opensbi/bin/fw_jump.bin")]
+tests = [Path("opensbi/bin/fw_jump.bin")]
 # tests = [Path("./tests/custom/hello/hello.bin")]
-tests = [Path("./tests/custom/timer_interrupt/main.bin")]
-
+# tests = [Path("./tests/custom/timer_interrupt/main.bin")]
 # tests = [tests[0]]
 
 
@@ -1010,14 +1059,21 @@ RAM_BASE = 0x8000_0000
 MEIP_BIT = 11
 SEIP_BIT = 9
 
+from pyinstrument import Profiler
+
 for test in tests:
     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", 
-          end='\n' if DEBUG else '', flush=True)
+          end='\n' if VERBOSE else '', flush=True)
     
     if CONSOLE:
         uart = UART16550()
+        
+    bios = MemoryDevice.from_binary_file("tests/custom/bios/bios.bin", 'BIOS')
+    kernel = MemoryDevice.from_binary_file("tests/custom/kernel/kernel.bin", 'KERNEL')
+    dts = MemoryDevice.from_binary_file("device_tree/platform.dtb", 'DEVICE_TREE')
+    
     ram = MemoryDevice.from_binary_file(test, "RAM")
-    ram.expand(0x800_0000)
+    ram.expand(0x1f_ffff)
     
     # clint = CLINT()
     clint = CLINT()
@@ -1026,9 +1082,12 @@ for test in tests:
 
     sys_bus = SystemInterface()
     
+    sys_bus.register_device(bios, 0x0)
+    sys_bus.register_device(dts, 0x2000)
+    sys_bus.register_device(kernel, 0x80200000)
+    
     sys_bus.register_device(clint, CLINT_BASE)
     sys_bus.register_device(plic, PLIC_BASE)
-    
     if CONSOLE:
         sys_bus.register_device(uart, UART_BASE)
         
@@ -1038,6 +1097,7 @@ for test in tests:
     if CONSOLE:
         uart.set_irq_callback(plic.set_interrupt)
     
+    print(sys_bus)
     
     if RISCV_TEST:
         if CUSTOM_TEST:
@@ -1047,8 +1107,9 @@ for test in tests:
     else:
         to_host_addr=0
     
-    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F, Ext.A], to_host_addr=to_host_addr)
-
+    h0 = RV64Hart(0, sys_bus, [Ext.S, Ext.U, Ext.C, Ext.M, Ext.F, Ext.A], to_host_addr=to_host_addr,
+                  entry_point=0x0)
+    h0.set_breakpoint(-1)
     break_debug=True
     
     h0_m_ctx_plic = plic.register_context(hart=h0, bit=MEIP_BIT)
@@ -1064,13 +1125,16 @@ for test in tests:
         print("Waiting connection...")
         while not uart.is_connected():
             pass
+            
+    if PROFILE:
+        profiler = Profiler()
+        profiler.start()
         
     # break
     try:
         while(h0.step() and break_debug):
-            clint.inc_time()
-            log.error(clint.mtime)
-            if DEBUG and not FREERUN:
+            
+            if DEBUG:
                 while True: # Debugger
                     cmd = input("> ")
                     cmd : List[str] = [c.lower() for c in cmd.strip().split(" ")]
@@ -1093,8 +1157,7 @@ for test in tests:
                             " - csr yyy           yyy=[mstatus, 0x300, ...] return the value of a csr register by name or \n"+\
                             "                     hex address\n"+\
                             " - q / quit          quit debugger\n\n"                          
-                        )
-                            
+                        )                            
                     elif cmd[0]=="priv":
                         print(h0.mode)
                     elif cmd[0]=="reg":
@@ -1111,8 +1174,7 @@ for test in tests:
                                 else:
                                     print(f"No reg named {cmd[1]}\n")
                         else:
-                            print(h0.regfile)
-                            
+                            print(h0.regfile)                            
                     elif cmd[0]=="freg":
                         if len(cmd)>1:
                             if cmd[1].isnumeric():
@@ -1129,13 +1191,58 @@ for test in tests:
                         else:
                             print(h0.fp_regfile)
                     elif cmd[0]=="":
+                        clint.inc_time()
+                        log.error(clint.mtime)
                         break
                     elif cmd[0]=="br":
                         if len(cmd)>1:
                             h0.set_breakpoint(int(cmd[1], 16))
-                            while(h0.step()):pass
-                            h0.set_breakpoint(0)
-                        break
+                            set_log_level(logging.CRITICAL)
+                            while(h0.step()):
+                                clint.inc_time()
+                                log.error(clint.mtime)
+                            h0.set_breakpoint(-1)
+                            set_log_level(VERBOSE_LEVEL)
+                    elif cmd[0]=="brst":
+                        if len(cmd)>1:
+                            h0.set_store_breakpoint(int(cmd[1], 16))
+                            while(h0.step()):
+                                clint.inc_time()
+                                log.error(clint.mtime)
+                            h0.set_store_breakpoint(-1)
+                            h0.set_breakpoint(-1)
+                    elif cmd[0]=="brld":
+                        if len(cmd)>1:
+                            h0.set_load_breakpoint(int(cmd[1], 16))
+                            while(h0.step()):
+                                clint.inc_time()
+                                log.error(clint.mtime)
+                            h0.set_load_breakpoint(-1)
+                            h0.set_breakpoint(-1)
+                    elif cmd[0]=="untilcsr":
+                        if len(cmd)>2:
+                            try:
+                                csr_addr = -1
+                                if cmd[1].startswith('0x'):
+                                    csr_addr = int(cmd[1], 16)
+                                    h0.csr[int(cmd[1], 16)]
+                                else:
+                                    # if cmd[1] in h0.csr.name_to_addr:
+                                    csr_addr = h0.csr.name_to_addr[cmd[1]]
+                                    h0.csr[h0.csr.name_to_addr[cmd[1]]]
+                                
+                                # print(hex(csr_addr), h0.csr[csr_addr].all)
+                                while(h0.step()):
+                                    clint.inc_time()
+                                    log.error(clint.mtime)
+                                    if h0.csr[csr_addr].all==int(cmd[2]):
+                                        break
+                                
+                            except KeyError:
+                                print(f"{cmd[1]} not a valid csr" )   
+                        else:
+                            print("Expected csr and value")
+                                
                     elif cmd[0]=='csr':
                         try:
                             if cmd[1].startswith('0x'):
@@ -1146,14 +1253,23 @@ for test in tests:
                         except KeyError:
                             print(f"{cmd[1]} not a valid csr" )   
             else: 
-                pass
+                clint.inc_time()
+                log.error(clint.mtime)
     
-    except KeyboardInterrupt:       
-        print("Keyboard Interrupt")
+    except Exception as e:       
+        # print("Keyboard Interrupt")
+        print("Exception", f"pc {hex(h0.pc)}")
+        traceback.print_exc()
+        print(e)
     finally:
         if CONSOLE:
             uart.shutdown()
             del uart
+                
+        if PROFILE:
+            profiler.stop()
+            with open('profile.html', 'w') as f:
+                f.write(profiler.output_html())
         
     syscall_code = h0.regfile[17]
     syscall_data = h0.regfile[10] 
