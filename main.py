@@ -896,6 +896,7 @@ class RV64Hart():
                 elif f12==SYS_F12.EBREAK:
                     log.error("--EBREAK--")
                     # TODO: implement debugger for FPGA @DavideRuzza
+                    self.raiseException(ExceptionCode.Breakpoint)
                 elif f12==SYS_F12.WFI:
                     log.error("--WFI--")
                     self.wait_mode = True

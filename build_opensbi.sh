@@ -21,7 +21,7 @@ rm opensbi/bin/*
 rm opensbi/elf/*
 rm opensbi/*.dump
 
-cp ./opensbi/opensbi/build/platform/generic/firmware/*.bin ./opensbi/bin/
-cp ./opensbi/opensbi/build/platform/generic/firmware/*.elf ./opensbi/elf/
+cp ./opensbi/opensbi-main/build/platform/generic/firmware/*.bin ./opensbi/bin/
+cp ./opensbi/opensbi-main/build/platform/generic/firmware/*.elf ./opensbi/elf/
 
 riscv64-unknown-linux-gnu-objdump -d ./opensbi/elf/fw_jump.elf > ./opensbi/fw_jump.dump
