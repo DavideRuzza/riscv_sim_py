@@ -12,4 +12,5 @@ opensbi/spike
 opensbi/opensbi-main/
 # compile_dt.sh
 copy_opensbi.sh
+*.html
 tmp/
