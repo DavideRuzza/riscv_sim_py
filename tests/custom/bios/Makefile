@@ -7,7 +7,7 @@ bios: bios.o bios.ld
 	rm -f *.o
 
 bios.o: bios.s
-	${CROSS_COMPILE}as -march=rv64imacf -mabi=lp64 -o bios.o -c bios.s
+	${CROSS_COMPILE}as -march=rv64imaf -mabi=lp64 -o bios.o -c bios.s
 	
 
 clean:

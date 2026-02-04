@@ -72,6 +72,8 @@
             compatible = "ns16550";
             interrupt-parent = <&plic>;
             interrupts = <10>;
+            reg-io-width = <4>;
+            reg-shift = <2>;
         };
     };
 };

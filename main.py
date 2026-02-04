@@ -10,6 +10,9 @@ from FPU32 import FPU, pack_f32, pack_fflags, qNaNf
 from operators import alu
 from com import UART16550
 import traceback
+import datetime
+from pyinstrument import Profiler
+
 
 def branch_unit(op1:int, op2:int, f3: BR_F3):
     if f3==BR_F3.BNE:
@@ -56,6 +59,29 @@ CINSTR_BLK_MAP = {
     "C_jump_target":[12,2],
 }
 
+class Instruction(Reg):
+    INSTR_BLK_MAP = {
+        "opcode": [6, 0],
+        "I_f12": [31, 20],
+        "I_f7": [31, 25],
+        "I_f5": [31, 27],
+        "I_f3": [14, 12],
+        "I_rd": [11, 7],
+        "I_rs1": [19, 15],
+        "I_rs2": [24, 20],
+        "I_csr": [31, 20]
+    }
+    
+    def __init__(self, value):
+        super().__init__(32, value)
+    
+    def __getattr__(self, name):
+        if name in self.INSTR_BLK_MAP:
+            high, low = self.INSTR_BLK_MAP[name]
+            # Extract bits from high to low (inclusive)
+            mask = (1 << (high - low + 1)) - 1
+            return (self.reg >> low) & mask
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
 
 class RV64Hart():
@@ -75,7 +101,43 @@ class RV64Hart():
         'ft8', 'ft9', 'ft10', 'ft11'
     ]
     
-
+    OPS = {
+        0b00_000_00: "ILLEGAL",
+        0b00_000_11: "LOAD",
+        0b01_000_11: "STORE",
+        0b10_000_11: "FMADD",
+        0b11_000_11: "BRANCH",
+        0b00_001_11: "LOAD_FP",
+        0b01_001_11: "STORE_FP",
+        0b10_001_11: "FMSUB",
+        0b11_001_11: "JALR",
+        0b00_010_11: "custom0",
+        0b01_010_11: "custom1",
+        0b10_010_11: "FMNSUB",
+        0b00_011_11: "MISC_MEM",
+        0b01_011_11: "AMO",
+        0b10_011_11: "FNMADD",
+        0b11_011_11: "JAL",
+        0b00_100_11: "OP_IMM",
+        0b01_100_11: "OP",
+        0b10_100_11: "OP_FP",
+        0b11_100_11: "SYSTEM",
+        0b00_101_11: "AUIPC",
+        0b01_101_11: "LUI",
+        0b10_101_11: "OP_V",
+        0b11_101_11: "OP_VE",
+        0b00_110_11: "OP_IMM_32",
+        0b01_110_11: "OP_32",
+        0b10_110_11: "custom2",
+        0b11_110_11: "custom3",
+    }
+    
+    
+    # write_back_inst = [Ops.JAL, Ops.OP, Ops.OP_32, Ops.OP_IMM, Ops.JALR,
+    #                 Ops.OP_IMM_32, Ops.AUIPC, Ops.LUI, Ops.LOAD, Ops.AMO]
+    
+    write_back_inst = ["JAL", "OP", "OP_32", "OP_IMM", "JALR",
+                    "OP_IMM_32", "AUIPC", "LUI", "LOAD", "AMO"]
     def __init__(self, 
             hartid, 
             bus: SystemInterface = None, 
@@ -106,6 +168,7 @@ class RV64Hart():
         
         self.wait_mode = False
         
+        self.ins = Instruction(0) #BlockReg(32, 0, INSTR_BLK_MAP) # initialize Block reg
         # ------------- control variable value
         self.new_pc = 0
         self.write_back = False
@@ -117,6 +180,7 @@ class RV64Hart():
         self.store_breakpoint_addr = -1
         self.load_breakpoint_addr = -1
         
+        self.instruction_profile = {n: 0 for n in self.OPS.values()}
         # ------------- SETUP CSR
         self.csr.misa.Extensions = sum([e.value for e in self.ext_list])
         
@@ -138,8 +202,19 @@ class RV64Hart():
             
         self.csr.mtvec.update_warl_blk("MODE", [0, 1]) # normal mode or vectored
         
-
-        # self.terminate = False # used to stop the process whethever bad happends
+        # -------------------- cache definition 
+        # needs to be easy just array or dictionary
+        # fully associative, word aligned
+        N_WORD = 16 # -> 4 bit word id
+        N_LINES = 512 # -> 9 bit line id
+        # -> 32 - 4 - 9 - 2 (for word aligment) = 17 bit tag
+        #
+        # 31              15         6    2  0
+        #  v               v         v    v  v
+        #  ttttttttttttttttt lllllllll wwww aa
+        # cache line : [valid bit, tag, [word1, word2, ...]]
+        # when valid bit is set to 0 the cache line is not valid
+        # self.cache = [[0, []] for ]
 
     def set_breakpoint(self, brkpt):
         self.breakpoint_addr=brkpt
@@ -161,12 +236,12 @@ class RV64Hart():
         if len(self.exception_list)>0:
             e = self.exception_list.pop()
             # print(f"code {e}, pc 0x{hex(self.pc)}")
-            medeleg = self.csr.medeleg.all
+            medeleg = self.csr.csr_map[0x302].reg.reg
             
             # check if the exception is delegated to S mode
             deleg_cond = (medeleg>>e.value)&0b1
 
-            log.error(f"--- Exception : {e.name}, Handle: {"S" if deleg_cond else "M"} ---")
+            # -log.error(f"--- Exception : {e.name}, Handle: {"S" if deleg_cond else "M"} ---")
 
             if deleg_cond and self.mode!=Mode.M:
                 self.csr.sepc.all = self.pc
@@ -174,7 +249,7 @@ class RV64Hart():
                 
                 # check for vectored exception
                 if self.csr.stvec.MODE==1:
-                    log.error("--- Vectored ---")
+                    # -log.error("--- Vectored ---")
                     self.new_pc += 4*e.value
                 
                 self.csr.scause.INT = 0b0 # is an exception, not an interrupt
@@ -188,7 +263,7 @@ class RV64Hart():
                 
                 # check for vectored exceptions
                 if self.csr.mtvec.MODE==1:
-                    log.error("--- Vectored ---")
+                    # -log.error("--- Vectored ---")
                     self.new_pc += 4*e.value
                 
                 self.csr.mcause.INT = 0b0 # is an exception, not an interrupt
@@ -230,28 +305,49 @@ class RV64Hart():
         - S-mode interrupts only interrupt S-mode code if delegated and SIE=1
         - In M-mode, only handle if MIE=1
         """
-        # Get pending interrupts from mip
-        mip = self.csr.mip._blocks['all'][:]
         
-        # Get interrupt delegation - which interrupts are delegated to S mode
-        mideleg = self.csr.mideleg._blocks['all'][:]
-        
-        # Get interrupt enable flags
-        mie = self.csr.mie._blocks['all'][:]
-        sie = self.csr.sie._blocks['all'][:]
         
         if self.mode == Mode.M:
             # In M mode: check if M-mode interrupts are globally enabled
-            mie_enabled = self.csr.mstatus._blocks['MIE'].val  # MIE bit in mstatus
+            # mie_enabled = self.csr.mstatus._blocks['MIE'].val  # MIE bit in mstatus
+            # self.csr.csr_map[0x300].reg.reg
+            # mie_enabled = self.csr.mstatus.reg.reg>>3 & 0x1 # faster
+            mie_enabled = self.csr.csr_map[0x300].reg.reg>>3 & 0x1 # faster
             
             if not mie_enabled:
                 return False
             
+            # Get pending interrupts from mip
+            # mip = self.csr.mip.reg.reg
+            mip = self.csr.csr_map[0x344].reg.reg
+            
+            # Get interrupt delegation - which interrupts are delegated to S mode
+            # mideleg = self.csr.mideleg.reg.reg
+            mideleg = self.csr.csr_map[0x303].reg.reg
+            
+            # Get interrupt enable flags
+            # mie = self.csr.mie.reg.reg
+            mie = self.csr.csr_map[0x304].reg.reg
+        
             # Handle M-mode interrupts (not delegated) that are pending and enabled
             pending = mip & mie & ~mideleg
         
         else:  # S mode
             # In S mode, we have two cases:
+            # Get pending interrupts from mip
+            # mip = self.csr.mip.reg.reg
+            mip = self.csr.csr_map[0x344].reg.reg
+            
+            # Get interrupt delegation - which interrupts are delegated to S mode
+            # mideleg = self.csr.mideleg.reg.reg
+            mideleg = self.csr.csr_map[0x303].reg.reg
+            
+            # Get interrupt enable flags
+            # mie = self.csr.mie.reg.reg
+            mie = self.csr.csr_map[0x304].reg.reg
+            
+            # sie = self.csr.sie.reg.reg
+            sie = self.csr.csr_map[0x104].reg.reg
             
             # Case 1: M-mode interrupts (not delegated)
             # These ALWAYS interrupt S mode, regardless of SIE
@@ -266,7 +362,8 @@ class RV64Hart():
             
             # Case 2: S-mode delegated interrupts
             # These only interrupt if SIE=1 in sstatus
-            sie_enabled = self.csr.sstatus.SIE  # SIE bit in sstatus
+            # sie_enabled = self.csr.sstatus.reg.reg>>1 & 0x1 # SIE bit in sstatus
+            sie_enabled = self.csr.csr_map[0x100].reg.reg>>1 & 0x1 # SIE bit in sstatus
             
             if not sie_enabled:
                 return False
@@ -291,19 +388,19 @@ class RV64Hart():
         """
         Take an interrupt and switch to the target privilege mode.
         """
-        mideleg = self.csr.mideleg.all
+        mideleg = self.csr.mideleg.value
         deleg_cond = (mideleg >> interrupt_code) & 0b1
         
-        log.error(f"--- Interrupt: {InterruptCode(interrupt_code).name}, Handle: {"S" if deleg_cond else "M"} ---")
+        # -log.error(f"--- Interrupt: {InterruptCode(interrupt_code).name}, Handle: {"S" if deleg_cond else "M"} ---")
         
         if target_mode == Mode.S:
             # Handle in S mode
-            self.csr.sepc.all = self.pc
+            self.csr.sepc.reg.reg = self.pc
             self.new_pc = self.csr.stvec.BASE << 2
             print(hex(self.new_pc))
             # Check for vectored interrupts
             if self.csr.stvec.MODE == 1:
-                log.error("--- Vectored ---")
+                # -log.error("--- Vectored ---")
                 self.new_pc += 4 * interrupt_code
             
             self.csr.scause.INT = 0b1  # This is an interrupt
@@ -319,12 +416,12 @@ class RV64Hart():
         
         else:  # M mode
             # Handle in M mode
-            self.csr.mepc.all = self.pc
+            self.csr.mepc.reg.reg = self.pc
             self.new_pc = self.csr.mtvec.BASE << 2
             print(hex(self.new_pc))
             # Check for vectored interrupts
             if self.csr.mtvec.MODE == 1:
-                log.error("--- Vectored ---")
+                # -log.error("--- Vectored ---")
                 self.new_pc += 4 * interrupt_code
             
             self.csr.mcause.INT = 0b1  # This is an interrupt
@@ -378,11 +475,15 @@ class RV64Hart():
             return True
         
         # ---------------------------- FETCH --------------------------------- #
-        log.debug(" - - - - - - - - - - ")
-        ins = BlockReg(32, self.sys_bus.read(self.pc), INSTR_BLK_MAP)
+        # -log.debug(" - - - - - - - - - - ")
+        # ins = BlockReg(32, self.sys_bus.read(self.pc), INSTR_BLK_MAP)
+        
+        raw_ins = self.sys_bus.read(self.pc)
+        self.ins.reg = raw_ins
+        ins = self.ins
         
         pc_plus_4 = self.pc+4
-        pc_plus_2 = self.pc+2
+        # pc_plus_2 = self.pc+2
         
         self.new_pc = pc_plus_4
         
@@ -399,7 +500,7 @@ class RV64Hart():
         self.inst_ret = True
         self.cnt_cycle = True
         
-        is_compressed = False
+        # is_compressed = False
         
         
         if self.handleInterrupts():
@@ -408,301 +509,338 @@ class RV64Hart():
             return True
         
         if self.wait_mode:
-            log.error(f"-- WFI at {self.pc:08x}", )
+            # -log.error(f"-- WFI at {self.pc:08x}", )
             return True
         
         # ------------------------------ DECODE ------------------------------ #
 
         # ---------------- 16 bit to 32 bit stage translation ---------------- #
         
-        if ins[1:0] != 0b11:
-            new_ins = BlockReg(32, 0, INSTR_BLK_MAP)
+        # if ins[1:0] != 0b11:
+        #     new_ins = BlockReg(32, 0, INSTR_BLK_MAP)
             
-            if ins[15:0] != 0:
-                # print("is Compressed")
+        #     if ins[15:0] != 0:
+        #         # print("is Compressed")
                 
-                new_ins.opcode=Ops.OP_IMM.value
-                base_reg = 0x8
-                # decode and create the 32 version of this compressed instruction
-                is_compressed = True
-                ins_c = BlockReg(16, ins.all&self.mask16, CINSTR_BLK_MAP)
+        #         new_ins.opcode=Ops.OP_IMM.value
+        #         base_reg = 0x8
+        #         # decode and create the 32 version of this compressed instruction
+        #         is_compressed = True
+        #         ins_c = BlockReg(16, ins.all&self.mask16, CINSTR_BLK_MAP)
                 
-                # print((ins_c.C_f3<<2) | (ins_c.C_op))
-                ins_c = BlockReg(16, ins.all&self.mask16, CINSTR_BLK_MAP)
-                c_opcode = Ops_C((ins_c.C_f3<<2) | (ins_c.C_op))
-                log.warning(c_opcode)
+        #         # print((ins_c.C_f3<<2) | (ins_c.C_op))
+        #         ins_c = BlockReg(16, ins.all&self.mask16, CINSTR_BLK_MAP)
+        #         c_opcode = Ops_C((ins_c.C_f3<<2) | (ins_c.C_op))
+        #         # -log.warning(c_opcode)
                 
-                # is_op_imm=False
-                if c_opcode==Ops_C.ADDI4SPN:
-                    i_imm = (ins_c[12:11]<<4) | (ins_c[10:7]<<6) | (ins_c[6]<<2) | (ins_c[5]<<3)
-                    new_ins.I_rd = ins_c.C0_rd_prime+base_reg # from stack pointer
-                    new_ins.I_rs1 = 2 # from stack pointer
-                    new_ins.opcode = Ops.OP_IMM.value             
-                elif c_opcode==Ops_C.LUI_ADDI16SP:
-                    if ins_c.C_rd!=2: # is a LUI
-                        log.warning("-> LUI")
-                        u_imm = sign_extend((ins_c[12]<<17) | (ins_c[6:2]<<12), 18)
-                        new_ins.I_rd = ins_c.C_rd
-                        new_ins.opcode = Ops.LUI.value
-                    else: #is add 16
-                        log.warning("-> ADDI16SP")
-                        i_imm = sign_extend((ins_c[12]<<9)|(ins_c[6]<<4)|\
-                            (ins_c[5]<<6)|(ins_c[4:3]<<7)|(ins_c[2]<<5), 10)
-                        new_ins.I_rs1 = 2 # from stack pointer
-                        new_ins.I_rd = 2 # from stack pointer
-                        new_ins.opcode = Ops.OP_IMM.value
-                elif c_opcode==Ops_C.LI:
-                    i_imm = sign_extend((ins_c[12]<<5) | (ins_c[6:2]), 6)
-                    if ins_c.C_rd!=0:
-                        new_ins.I_rd = ins_c.C_rd
-                        new_ins.I_rs1 = 0
-                        new_ins.opcode = Ops.OP_IMM.value
-                elif c_opcode==Ops_C.ADDI:
-                    i_imm = sign_extend((ins_c[12]<<5) | (ins_c[6:2]), 6)
-                    if ins_c.C_rd!=0 and i_imm!=0:
-                        new_ins.I_rd = ins_c.C_rd
-                        new_ins.I_rs1 = new_ins.I_rd
-                        new_ins.opcode = Ops.OP_IMM.value
-                elif c_opcode==Ops_C.ADDIW:
-                    i_imm = sign_extend((ins_c[12]<<5) | (ins_c[6:2]), 6)
-                    if ins_c.C_rd!=0:
-                        new_ins.I_rd = ins_c.C_rd
-                        new_ins.I_rs1 = new_ins.I_rd
-                        new_ins.opcode = Ops.OP_IMM_32.value
-                elif c_opcode in [Ops_C.LW, Ops_C.LD]: # LOAD
-                    if c_opcode==Ops_C.LW:
-                        new_ins.I_f3 = 0b010
-                        i_imm = (ins_c[12:10]<<3)|(ins_c[6]<<2)|(ins_c[5]<<6)
-                    elif c_opcode==Ops_C.LD:
-                        new_ins.I_f3 = 0b011
-                        i_imm = (ins_c[12:10]<<3)|(ins_c[6:5]<<6)
-                    new_ins.I_rd = ins_c.C0_rd_prime+base_reg
-                    new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
-                    new_ins.opcode = Ops.LOAD.value
-                elif c_opcode in [Ops_C.LWSP, Ops_C.LDSP]: # LOAD
-                    if c_opcode==Ops_C.LWSP:
-                        new_ins.I_f3 = 0b010
-                        i_imm = (ins_c[12]<<5)|(ins_c[6:4]<<2)|(ins_c[3:2]<<6)
-                    elif c_opcode==Ops_C.LDSP:
-                        new_ins.I_f3 = 0b011
-                        i_imm = (ins_c[12]<<5)|(ins_c[6:5]<<3)|(ins_c[4:2]<<6)
-                    new_ins.I_rd = ins_c.C_rd
-                    new_ins.I_rs1 = 2
-                    new_ins.opcode = Ops.LOAD.value
-                elif c_opcode in [Ops_C.SW, Ops_C.SD]: # STORE
-                    if c_opcode==Ops_C.SW:
-                        new_ins.I_f3 = 0b010
-                        s_imm = (ins_c[12:10]<<3)|(ins_c[6]<<2)|(ins_c[5]<<6)
-                    elif c_opcode==Ops_C.SD:
-                        new_ins.I_f3 = 0b011
-                        s_imm = (ins_c[12:10]<<3)|(ins_c[6:5]<<6) 
-                    new_ins.I_rs2 = ins_c.C_rs2_prime+base_reg
-                    new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
-                    new_ins.opcode = Ops.STORE.value
-                elif c_opcode in [Ops_C.SWSP, Ops_C.SDSP]: # STORE
-                    if c_opcode==Ops_C.SWSP:
-                        new_ins.I_f3 = 0b010
-                        s_imm = (ins_c[12:9]<<2)|(ins_c[8:7]<<6)
-                    elif c_opcode==Ops_C.SDSP:
-                        new_ins.I_f3 = 0b011
-                        s_imm = (ins_c[12:10]<<3)|(ins_c[9:7]<<6) 
-                    new_ins.I_rs2 = ins_c.C_rs2
-                    new_ins.I_rs1 = 2
-                    new_ins.opcode = Ops.STORE.value
-                elif c_opcode==Ops_C.MISC_ALU:
-                    if ins_c.C_f2_prime in [0b00, 0b01, 0b10]: # SRLI, SRAI, ANDI
-                        i_imm = (ins_c[12]<<5)|(ins_c[6:2])
-                        new_ins.I_rd = ins_c.C1_rd_prime+base_reg
-                        new_ins.I_rs1 = new_ins.I_rd
-                        if ins_c.C_f2_prime==0b10: # ANDI
-                            new_ins.I_f3 = OP_F3.AND.value
-                            i_imm = sign_extend(i_imm, 6)
-                            log.warning( "-> ANDI")
-                        else:
-                            new_ins.I_f3 = OP_F3.SRX.value
-                            new_ins.I_f7 = 0x20 if ins_c.C_f2_prime==0b01 else 0b0 # f7=0 when srli
-                            log.warning( "-> SRAI" if ins_c.C_f2_prime==0b01 else "-> SRLI")
-                        new_ins.opcode = Ops.OP_IMM.value
-                    else:
-                        misc_alu_op = MISC_ALU_OP((ins_c[12]<<2)|(ins_c[6:5]))
-                        new_ins.I_rd = ins_c.C1_rd_prime+base_reg
-                        new_ins.I_rs1 = new_ins.I_rd
-                        new_ins.I_rs2 = ins_c.C_rs2_prime+base_reg
+        #         # is_op_imm=False
+        #         if c_opcode==Ops_C.ADDI4SPN:
+        #             i_imm = (ins_c[12:11]<<4) | (ins_c[10:7]<<6) | (ins_c[6]<<2) | (ins_c[5]<<3)
+        #             new_ins.I_rd = ins_c.C0_rd_prime+base_reg # from stack pointer
+        #             new_ins.I_rs1 = 2 # from stack pointer
+        #             new_ins.opcode = Ops.OP_IMM.value             
+        #         elif c_opcode==Ops_C.LUI_ADDI16SP:
+        #             if ins_c.C_rd!=2: # is a LUI
+        #                 # -log.warning("-> LUI")
+        #                 u_imm = sign_extend((ins_c[12]<<17) | (ins_c[6:2]<<12), 18)
+        #                 new_ins.I_rd = ins_c.C_rd
+        #                 new_ins.opcode = Ops.LUI.value
+        #             else: #is add 16
+        #                 # -log.warning("-> ADDI16SP")
+        #                 i_imm = sign_extend((ins_c[12]<<9)|(ins_c[6]<<4)|\
+        #                     (ins_c[5]<<6)|(ins_c[4:3]<<7)|(ins_c[2]<<5), 10)
+        #                 new_ins.I_rs1 = 2 # from stack pointer
+        #                 new_ins.I_rd = 2 # from stack pointer
+        #                 new_ins.opcode = Ops.OP_IMM.value
+        #         elif c_opcode==Ops_C.LI:
+        #             i_imm = sign_extend((ins_c[12]<<5) | (ins_c[6:2]), 6)
+        #             if ins_c.C_rd!=0:
+        #                 new_ins.I_rd = ins_c.C_rd
+        #                 new_ins.I_rs1 = 0
+        #                 new_ins.opcode = Ops.OP_IMM.value
+        #         elif c_opcode==Ops_C.ADDI:
+        #             i_imm = sign_extend((ins_c[12]<<5) | (ins_c[6:2]), 6)
+        #             if ins_c.C_rd!=0 and i_imm!=0:
+        #                 new_ins.I_rd = ins_c.C_rd
+        #                 new_ins.I_rs1 = new_ins.I_rd
+        #                 new_ins.opcode = Ops.OP_IMM.value
+        #         elif c_opcode==Ops_C.ADDIW:
+        #             i_imm = sign_extend((ins_c[12]<<5) | (ins_c[6:2]), 6)
+        #             if ins_c.C_rd!=0:
+        #                 new_ins.I_rd = ins_c.C_rd
+        #                 new_ins.I_rs1 = new_ins.I_rd
+        #                 new_ins.opcode = Ops.OP_IMM_32.value
+        #         elif c_opcode in [Ops_C.LW, Ops_C.LD]: # LOAD
+        #             if c_opcode==Ops_C.LW:
+        #                 new_ins.I_f3 = 0b010
+        #                 i_imm = (ins_c[12:10]<<3)|(ins_c[6]<<2)|(ins_c[5]<<6)
+        #             elif c_opcode==Ops_C.LD:
+        #                 new_ins.I_f3 = 0b011
+        #                 i_imm = (ins_c[12:10]<<3)|(ins_c[6:5]<<6)
+        #             new_ins.I_rd = ins_c.C0_rd_prime+base_reg
+        #             new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
+        #             new_ins.opcode = Ops.LOAD.value
+        #         elif c_opcode in [Ops_C.LWSP, Ops_C.LDSP]: # LOAD
+        #             if c_opcode==Ops_C.LWSP:
+        #                 new_ins.I_f3 = 0b010
+        #                 i_imm = (ins_c[12]<<5)|(ins_c[6:4]<<2)|(ins_c[3:2]<<6)
+        #             elif c_opcode==Ops_C.LDSP:
+        #                 new_ins.I_f3 = 0b011
+        #                 i_imm = (ins_c[12]<<5)|(ins_c[6:5]<<3)|(ins_c[4:2]<<6)
+        #             new_ins.I_rd = ins_c.C_rd
+        #             new_ins.I_rs1 = 2
+        #             new_ins.opcode = Ops.LOAD.value
+        #         elif c_opcode in [Ops_C.SW, Ops_C.SD]: # STORE
+        #             if c_opcode==Ops_C.SW:
+        #                 new_ins.I_f3 = 0b010
+        #                 s_imm = (ins_c[12:10]<<3)|(ins_c[6]<<2)|(ins_c[5]<<6)
+        #             elif c_opcode==Ops_C.SD:
+        #                 new_ins.I_f3 = 0b011
+        #                 s_imm = (ins_c[12:10]<<3)|(ins_c[6:5]<<6) 
+        #             new_ins.I_rs2 = ins_c.C_rs2_prime+base_reg
+        #             new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
+        #             new_ins.opcode = Ops.STORE.value
+        #         elif c_opcode in [Ops_C.SWSP, Ops_C.SDSP]: # STORE
+        #             if c_opcode==Ops_C.SWSP:
+        #                 new_ins.I_f3 = 0b010
+        #                 s_imm = (ins_c[12:9]<<2)|(ins_c[8:7]<<6)
+        #             elif c_opcode==Ops_C.SDSP:
+        #                 new_ins.I_f3 = 0b011
+        #                 s_imm = (ins_c[12:10]<<3)|(ins_c[9:7]<<6) 
+        #             new_ins.I_rs2 = ins_c.C_rs2
+        #             new_ins.I_rs1 = 2
+        #             new_ins.opcode = Ops.STORE.value
+        #         elif c_opcode==Ops_C.MISC_ALU:
+        #             if ins_c.C_f2_prime in [0b00, 0b01, 0b10]: # SRLI, SRAI, ANDI
+        #                 i_imm = (ins_c[12]<<5)|(ins_c[6:2])
+        #                 new_ins.I_rd = ins_c.C1_rd_prime+base_reg
+        #                 new_ins.I_rs1 = new_ins.I_rd
+        #                 if ins_c.C_f2_prime==0b10: # ANDI
+        #                     new_ins.I_f3 = OP_F3.AND.value
+        #                     i_imm = sign_extend(i_imm, 6)
+        #                     # -log.warning( "-> ANDI")
+        #                 else:
+        #                     new_ins.I_f3 = OP_F3.SRX.value
+        #                     new_ins.I_f7 = 0x20 if ins_c.C_f2_prime==0b01 else 0b0 # f7=0 when srli
+        #                     # -log.warning( "-> SRAI" if ins_c.C_f2_prime==0b01 else "-> SRLI")
+        #                 new_ins.opcode = Ops.OP_IMM.value
+        #             else:
+        #                 misc_alu_op = MISC_ALU_OP((ins_c[12]<<2)|(ins_c[6:5]))
+        #                 new_ins.I_rd = ins_c.C1_rd_prime+base_reg
+        #                 new_ins.I_rs1 = new_ins.I_rd
+        #                 new_ins.I_rs2 = ins_c.C_rs2_prime+base_reg
                         
-                        op32 = False
-                        if misc_alu_op==MISC_ALU_OP.SUB:
-                            new_ins.I_f3 = OP_F3.ADD_SUB.value
-                            new_ins.I_f7 = 0x20
-                            log.warning( "-> SUB")
-                        elif misc_alu_op==MISC_ALU_OP.XOR:
-                            new_ins.I_f3 = OP_F3.XOR.value
-                            log.warning( "-> XOR")
-                        elif misc_alu_op==MISC_ALU_OP.OR:
-                            new_ins.I_f3 = OP_F3.OR.value
-                            log.warning( "-> OR")
-                        elif misc_alu_op==MISC_ALU_OP.AND:
-                            new_ins.I_f3 = OP_F3.AND.value
-                            log.warning( "-> AND")
-                        elif misc_alu_op==MISC_ALU_OP.ADDW:
-                            new_ins.I_f3 = OP_F3.ADD_SUB.value
-                            log.warning( "-> ADDW")
-                            op32=True
-                        elif misc_alu_op==MISC_ALU_OP.SUBW:
-                            new_ins.I_f3 = OP_F3.ADD_SUB.value
-                            new_ins.I_f7 = 0x20
-                            log.warning( "-> SUBW")
-                            op32=True
-                        else:
-                            log.error(f"Misc mem {misc_alu_op} not defined")
-                            return False
-                        if op32:
-                            new_ins.opcode = Ops.OP_32.value
-                        else:
-                            new_ins.opcode = Ops.OP.value
-                elif c_opcode==Ops_C.SLLI:
-                    i_imm = (ins_c[12]<<5)|(ins_c[6:2])
-                    if ins_c.C_rd!=0:
-                        new_ins.I_rd = ins_c.C_rd
-                        new_ins.I_rs1 = new_ins.I_rd
-                        new_ins.I_f3 = OP_F3.SLL.value
-                        log.warning( "-> SLLI")
-                        new_ins.opcode = Ops.OP_IMM.value
-                elif c_opcode==Ops_C.J:
-                    j_imm=(ins_c[12]<<11)|(ins_c[11]<<4)|(ins_c[10:9]<<8)|\
-                        (ins_c[8]<<10)|(ins_c[7]<<6)|(ins_c[6]<<7)|(ins_c[5:3]<<1)|\
-                        (ins_c[2]<<5)
-                    j_imm=sign_extend(j_imm, 12)
-                    new_ins.opcode=Ops.JAL.value
-                    new_ins.I_rd = 0
-                elif c_opcode in [Ops_C.BEQZ, Ops_C.BNEZ]:
-                    
-                    b_imm=(ins_c[12]<<8)|(ins_c[11:10]<<3)|(ins_c[6:5]<<6)|(ins_c[4:3]<<1)|(ins_c[2]<<5)
-                    b_imm=sign_extend(b_imm, 8)
-                    # print("debuuugg: ", hex(b_imm), bin(b_imm), bin(ins_c[12:10]), bin(ins_c[6:2]),  int_64(b_imm))
-                    new_ins.opcode = Ops.BRANCH.value
-                    new_ins.I_f3 = BR_F3.BEQ.value if c_opcode==Ops_C.BEQZ else BR_F3.BNE.value
-                    new_ins.I_rd = 0
-                    new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
-                    new_ins.I_rs2 = 0
-                    log.warning("-> BEQZ" if c_opcode==Ops_C.BEQZ else "BNEZ")
-                elif c_opcode==Ops_C.JAL_JALR_MV_ADD:
-                    if ins_c.C_rs2==0:
-                        if ins_c[12]==0:
-                            log.warning("-> JR")
-                            new_ins.opcode=Ops.JALR.value
-                            new_ins.I_rs1 = ins_c.C_rs1
-                            new_ins.I_rd = 0
-                            i_imm=0
-                        else:
-                            if ins_c.C_rs1!=0:
-                                log.warning("-> JALR")
-                                new_ins.opcode=Ops.JALR.value
-                                new_ins.I_rs1 = ins_c.C_rs1
-                                new_ins.I_rd = 1
-                                i_imm=0
-                            else:
-                                log.warning("-> BREAK")
-                                new_ins.I_f12 = 0b1
-                                new_ins.opcode=Ops.SYSTEM.value
-                    else:
-                        new_ins.opcode=Ops.OP.value
-                        new_ins.I_f3 = OP_F3.ADD_SUB.value
-                        new_ins.I_f7 = 0
-                        new_ins.I_rs2 = ins_c.C_rs2
-                        new_ins.I_rd = ins_c.C_rd
-                        if ins_c[12]==0: # MV
-                            log.warning("-> MV")
-                            new_ins.I_rs1 = 0
-                        else: # ADD
-                            log.warning("-> ADD")
-                            new_ins.I_rs1 = new_ins.I_rd
-                else:
-                    log.error(f"compressed Opcode {c_opcode} not defined")
-                    return False
+        #                 op32 = False
+        #                 if misc_alu_op==MISC_ALU_OP.SUB:
+        #                     new_ins.I_f3 = OP_F3.ADD_SUB.value
+        #                     new_ins.I_f7 = 0x20
+        #                     # -log.warning( "-> SUB")
+        #                 elif misc_alu_op==MISC_ALU_OP.XOR:
+        #                     new_ins.I_f3 = OP_F3.XOR.value
+        #                     # -log.warning( "-> XOR")
+        #                 elif misc_alu_op==MISC_ALU_OP.OR:
+        #                     new_ins.I_f3 = OP_F3.OR.value
+        #                     # -log.warning( "-> OR")
+        #                 elif misc_alu_op==MISC_ALU_OP.AND:
+        #                     new_ins.I_f3 = OP_F3.AND.value
+        #                     # -log.warning( "-> AND")
+        #                 elif misc_alu_op==MISC_ALU_OP.ADDW:
+        #                     new_ins.I_f3 = OP_F3.ADD_SUB.value
+        #                     # -log.warning( "-> ADDW")
+        #                     op32=True
+        #                 elif misc_alu_op==MISC_ALU_OP.SUBW:
+        #                     new_ins.I_f3 = OP_F3.ADD_SUB.value
+        #                     new_ins.I_f7 = 0x20
+        #                     # -log.warning( "-> SUBW")
+        #                     op32=True
+        #                 else:
+        #                     # -log.error(f"Misc mem {misc_alu_op} not defined")
+        #                     return False
+        #                 if op32:
+        #                     new_ins.opcode = Ops.OP_32.value
+        #                 else:
+        #                     new_ins.opcode = Ops.OP.value
+        #         elif c_opcode==Ops_C.SLLI:
+        #             i_imm = (ins_c[12]<<5)|(ins_c[6:2])
+        #             if ins_c.C_rd!=0:
+        #                 new_ins.I_rd = ins_c.C_rd
+        #                 new_ins.I_rs1 = new_ins.I_rd
+        #                 new_ins.I_f3 = OP_F3.SLL.value
+        #                 # -log.warning( "-> SLLI")
+        #                 new_ins.opcode = Ops.OP_IMM.value
+        #         elif c_opcode==Ops_C.J:
+        #             j_imm=(ins_c[12]<<11)|(ins_c[11]<<4)|(ins_c[10:9]<<8)|\
+        #                 (ins_c[8]<<10)|(ins_c[7]<<6)|(ins_c[6]<<7)|(ins_c[5:3]<<1)|\
+        #                 (ins_c[2]<<5)
+        #             j_imm=sign_extend(j_imm, 12)
+        #             new_ins.opcode=Ops.JAL.value
+        #             new_ins.I_rd = 0
+        #         elif c_opcode in [Ops_C.BEQZ, Ops_C.BNEZ]:                    
+        #             b_imm=(ins_c[12]<<8)|(ins_c[11:10]<<3)|(ins_c[6:5]<<6)|(ins_c[4:3]<<1)|(ins_c[2]<<5)
+        #             b_imm=sign_extend(b_imm, 8)
+        #             # print("debuuugg: ", hex(b_imm), bin(b_imm), bin(ins_c[12:10]), bin(ins_c[6:2]),  int_64(b_imm))
+        #             new_ins.opcode = Ops.BRANCH.value
+        #             new_ins.I_f3 = BR_F3.BEQ.value if c_opcode==Ops_C.BEQZ else BR_F3.BNE.value
+        #             new_ins.I_rd = 0
+        #             new_ins.I_rs1 = ins_c.C_rs1_prime+base_reg
+        #             new_ins.I_rs2 = 0
+        #             # -log.warning("-> BEQZ" if c_opcode==Ops_C.BEQZ else "BNEZ")
+        #         elif c_opcode==Ops_C.JAL_JALR_MV_ADD:
+        #             if ins_c.C_rs2==0:
+        #                 if ins_c[12]==0:
+        #                     # -log.warning("-> JR")
+        #                     new_ins.opcode=Ops.JALR.value
+        #                     new_ins.I_rs1 = ins_c.C_rs1
+        #                     new_ins.I_rd = 0
+        #                     i_imm=0
+        #                 else:
+        #                     if ins_c.C_rs1!=0:
+        #                         # -log.warning("-> JALR")
+        #                         new_ins.opcode=Ops.JALR.value
+        #                         new_ins.I_rs1 = ins_c.C_rs1
+        #                         new_ins.I_rd = 1
+        #                         i_imm=0
+        #                     else:
+        #                         # -log.warning("-> BREAK")
+        #                         new_ins.I_f12 = 0b1
+        #                         new_ins.opcode=Ops.SYSTEM.value
+        #             else:
+        #                 new_ins.opcode=Ops.OP.value
+        #                 new_ins.I_f3 = OP_F3.ADD_SUB.value
+        #                 new_ins.I_f7 = 0
+        #                 new_ins.I_rs2 = ins_c.C_rs2
+        #                 new_ins.I_rd = ins_c.C_rd
+        #                 if ins_c[12]==0: # MV
+        #                     # -log.warning("-> MV")
+        #                     new_ins.I_rs1 = 0
+        #                 else: # ADD
+        #                     # -log.warning("-> ADD")
+        #                     new_ins.I_rs1 = new_ins.I_rd
+        #         else:
+        #             # -log.error(f"compressed Opcode {c_opcode} not defined")
+        #             return False
                 
-                self.new_pc = pc_plus_2
+        #         self.new_pc = pc_plus_2
                 
-                ins = new_ins
+        #         ins = new_ins
         
         # -------------------- 32 bit instruction decoder -------------------- #
         
-        op = Ops(ins.opcode)
-        if op==Ops.ILLEGAL: self.raiseException(ExceptionCode.IllegalInstruction)
+        # op = Ops(ins.opcode)
+        # op_name = op.name
+        op_name = self.OPS[ins.opcode]
+        self.instruction_profile[op_name] += 1
         
-        self.handleException()
-        log.info(f"{self.pc:08x} {op.name}")
-                
-        r1 = self.regfile[ins.I_rs1]
-        r2 = self.regfile[ins.I_rs2]
+        if op_name=="ILLEGAL": 
+            self.raiseException(ExceptionCode.IllegalInstruction)
+            self.handleException()
+        # -log.info(f"{self.pc:08x} {op.name}")
         
-        fpr1 = self.fp_regfile[ins.I_rs1]
-        fpr2 = self.fp_regfile[ins.I_rs2]
-        fpr3 = self.fp_regfile[ins.I_f5]
         
-        if not is_compressed:
-            i_imm = sign_extend(ins[31:20], 12) & self.mask64
-            s_imm = sign_extend(ins[31:25]<<5 | ins[11:7], 12) & self.mask64
-            b_imm = sign_extend(ins[31]<<12 | ins[7]<<11 | \
-                ins[30:25]<<5 | ins[11:8] << 1, 12) & self.mask64
-            u_imm = sign_extend(ins[31:12]<<12, 32) & self.mask64
-            j_imm = sign_extend(ins[31]<<20 | ins[19:12]<<12 | \
-                ins[20]<<11 | ins[30:21] << 1, 20) & self.mask64
+        I_rs1 = (raw_ins>>15) & 0b11111
+        I_rs2 = (raw_ins>>20) & 0b11111
+        I_f5 = (raw_ins>>27) & 0b11111
+        I_f3 = (raw_ins>>12) & 0b111
+        I_f7 = (raw_ins>>25) & 0b1111111
+        I_f12 = (raw_ins>>20) & 0b111111111111
+        I_rd = (raw_ins>>7) & 0b11111
+        
+        r1 = self.regfile[I_rs1]
+        r2 = self.regfile[I_rs2]
+        
+        # if not is_compressed:
+        #     i_imm = sign_extend(ins[31:20], 12) & self.mask64
+        #     s_imm = sign_extend(ins[31:25]<<5 | ins[11:7], 12) & self.mask64
+        #     b_imm = sign_extend(ins[31]<<12 | ins[7]<<11 | \
+        #         ins[30:25]<<5 | ins[11:8] << 1, 12) & self.mask64
+        #     u_imm = sign_extend(ins[31:12]<<12, 32) & self.mask64
+        #     j_imm = sign_extend(ins[31]<<20 | ins[19:12]<<12 | \
+        #         ins[20]<<11 | ins[30:21] << 1, 20) & self.mask64
         
         # ---------------------------- EXECUTE ------------------------------- #
         
-        if op in [Ops.JAL, Ops.OP, Ops.OP_32, Ops.OP_IMM, Ops.JALR,
-                    Ops.OP_IMM_32, Ops.AUIPC, Ops.LUI, Ops.LOAD, Ops.AMO]:
-            self.write_back=True
-        
-        if op==Ops.ILLEGAL:
-            self.raiseException(ExceptionCode.IllegalInstruction) 
-        elif op==Ops.JAL:
-            new_rd = self.new_pc
-            self.new_pc = self.pc+j_imm
-        elif op==Ops.JALR:
-            new_rd = self.new_pc
-            self.new_pc = (r1 + i_imm) & (self.mask64-1)
-        elif op==Ops.OP:
-            # print(ins.I_rs1, ins.I_rs2)
-            new_rd = alu(r1, r2, OP_F3(ins.I_f3), ins.I_f7, False, False)
-        elif op==Ops.OP_32:
-            f3 = OP_F3(ins.I_f3)
-            res32 = alu(r1, r2, f3, ins.I_f7, True, False) 
-            new_rd = sign_extend(res32 & self.mask32, 32)
-        elif op==Ops.OP_IMM:
-            
-            f3 = OP_F3(ins.I_f3)
-            cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
-            f7 = ins.I_f7 if cond else 0
-            if f3==OP_F3.SRX:# for SRAI and SRLI f7 is actually only the top 6 bits
+        # print(op.name)
+        if op_name in self.write_back_inst:
+            self.write_back=True   
+        if   op_name=="OP_IMM":
+            cond = (I_f3!=0) or (I_f3==0b101)
+            f7 = I_f7 if cond else 0
+            if I_f3==0b101:# for SRAI and SRLI f7 is actually only the top 6 bits
                 f7 >>= 1
-            new_rd = alu(r1, i_imm, f3, f7, False, True)                 
-        elif op==Ops.OP_IMM_32:
-            f3 = OP_F3(ins.I_f3)
-            cond = (f3!=OP_F3.ADD_SUB) or (f3==OP_F3.SRX)
-            f7 = ins.I_f7 if cond else 0
-            # if f3==OP_F3.SRX: 
-            #     f7 >>= 1
-            res32 = alu(r1, i_imm, f3, f7, True, True) 
-            new_rd = sign_extend(res32 & self.mask32, 32)            
-        elif op==Ops.BRANCH:
-            if branch_unit(r1, r2, BR_F3(ins.I_f3)):
-                log.info("taken")
+            i_imm = sign_extend(I_f12, 12) & self.mask64
+            new_rd = alu(r1, i_imm, I_f3, f7, False, True)            
+        elif op_name=="LOAD":
+            i_imm = sign_extend(I_f12, 12) & self.mask64
+            addr = ( r1 + i_imm) & self.mask64
+            # LBU, LHU, LWU are just the same but with the bit 0b100
+            size_byte = 1<<(I_f3&0b11) 
+            if addr%size_byte!=0:
+                # -log.debug(f"load addr: {addr:08x}")
+                self.raiseException(ExceptionCode.LoadAddressMisaligned)
+                self.handleException()
+                self.write_back = False
+            else:
+                if (addr == self.load_breakpoint_addr):
+                    self.breakpoint_addr=self.pc
+                new_rd = self.sys_bus.read(addr, size_byte)
+                f3_l = LD_F3(I_f3)
+
+                if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
+                    new_rd = sign_extend(new_rd, size_byte*8) 
+        elif op_name=="OP_IMM_32":
+            cond = (I_f3!=0) or (I_f3==0b101)
+            f7 = I_f7 if cond else 0
+            i_imm = sign_extend(I_f12, 12) & self.mask64
+            res32 = alu(r1, i_imm, I_f3, f7, True, True) 
+            new_rd = sign_extend(res32 & self.mask32, 32) 
+        elif op_name=="STORE":
+            s_imm = sign_extend(ins[31:25]<<5 | ins[11:7], 12) & self.mask64
+            addr = ( r1 + s_imm) & self.mask64  
+            if (addr == self.to_host_addr):
+                # -log.error("__to_host__")
+                return False
+            if (addr == self.store_breakpoint_addr):
+                self.breakpoint_addr=self.pc
+            self.sys_bus.write(addr, r2, 1<<I_f3)                
+        elif op_name=="OP":
+            # print(ins.I_rs1, ins.I_rs2)
+            new_rd = alu(r1, r2, I_f3, I_f7, False, False)
+        elif op_name=="BRANCH":
+            if branch_unit(r1, r2, BR_F3(I_f3)):
+                # -log.info("taken")
+                b_imm = sign_extend(ins[31]<<12 | ins[7]<<11 | \
+                    ins[30:25]<<5 | ins[11:8] << 1, 12) & self.mask64
                 self.new_pc = self.pc + b_imm
             else:
-                log.info("not taken")
-        elif op==Ops.AUIPC:
-            new_rd = self.pc + u_imm
-        elif op==Ops.LUI:
+                pass
+                # -log.info("not taken")    
+        elif op_name=="JAL":
+            new_rd = self.new_pc
+            j_imm = sign_extend(ins[31]<<20 | ins[19:12]<<12 | \
+                ins[20]<<11 | ins[30:21] << 1, 20) & self.mask64
+            self.new_pc = self.pc+j_imm           
+        elif op_name=="JALR":
+            new_rd = self.new_pc
+            i_imm = sign_extend(I_f12, 12) & self.mask64
+            self.new_pc = (r1 + i_imm) & (self.mask64-1)
+        elif op_name=="OP_32":
+            # f3 = self.OP_F3[I_f3]
+            res32 = alu(r1, r2, I_f3, I_f7, True, False) 
+            new_rd = sign_extend(res32 & self.mask32, 32)                        
+        elif op_name=="LUI":
+            u_imm = sign_extend(ins[31:12]<<12, 32) & self.mask64
             new_rd = u_imm
-        elif op==Ops.MISC_MEM:
+        elif op_name=="AUIPC":
+            u_imm = sign_extend(ins[31:12]<<12, 32) & self.mask64
+            new_rd = self.pc + u_imm        
+        elif op_name=="MISC_MEM":
             pass
-        elif op==Ops.AMO:
+        elif op_name=="AMO":
             
             assert sys_bus.try_lock(self.hartid), 'AMO: hart {} could not lock the bus'.format(self.hartid)
-            size_byte = 1<<ins.I_f3
+            size_byte = 1<<I_f3
             
-            amo_f5 = AMO_OP_F5(ins.I_f5)
+            amo_f5 = AMO_OP_F5(I_f5)
             
             if amo_f5==AMO_OP_F5.LR:
                 val1 = sys_bus.load_reserve(r1&self.mask32, size_byte, self.hartid)
@@ -760,57 +898,43 @@ class RV64Hart():
                 amo_result = sign_extend(amo_result&self.mask32, 32) if size_byte==4 else amo_result
                 sys_bus.write(r1, amo_result, size_byte)
                 
-            sys_bus.unlock(self.hartid) 
-        elif op==Ops.STORE:
-            addr = ( r1 + s_imm) & self.mask64  
-            if (addr == self.to_host_addr):
-                log.error("__to_host__")
-                return False
-            if (addr == self.store_breakpoint_addr):
-                self.breakpoint_addr=self.pc
-            self.sys_bus.write(addr, r2, 1<<ins.I_f3)           
-        elif op==Ops.LOAD:
-            addr = ( r1 + i_imm) & self.mask64
-            # LBU, LHU, LWU are just the same but with the bit 0b100
-            size_byte = 1<<(ins.I_f3&0b11) 
-            
-            if addr%size_byte!=0:
-                log.debug(f"load addr: {addr:08x}")
-                self.raiseException(ExceptionCode.LoadAddressMisaligned)
-                self.write_back = False
-            else:
-                if (addr == self.load_breakpoint_addr):
-                    self.breakpoint_addr=self.pc
-                new_rd = self.sys_bus.read(addr, size_byte)
-                f3_l = LD_F3(ins.I_f3)
-                # print(size_byte)
-                if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
-                    new_rd = sign_extend(new_rd, size_byte*8)                   
-        elif op==Ops.LOAD_FP:
+            sys_bus.unlock(self.hartid)         
+        elif op_name=="LOAD_FP":
+            # fpr1 = self.fp_regfile[I_rs1]
+            # fpr2 = self.fp_regfile[I_rs2]
+            # fpr3 = self.fp_regfile[I_f5]
+            i_imm = sign_extend(I_f12, 12) & self.mask64
             addr = ( r1 + i_imm) & self.mask64   
             # 010 (2) for W; 011 (3) for D; 100 (4) for Q; 
-            size_byte = 1<<ins.I_f3
+            size_byte = 1<<I_f3
             new_rd = self.sys_bus.read(addr, size_byte)
             self.to_float_reg = True
             self.write_back = True
-        elif op==Ops.STORE_FP:
+        elif op_name=="STORE_FP":
+            # fpr1 = self.fp_regfile[I_rs1]
+            fpr2 = self.fp_regfile[I_rs2]
+            # fpr3 = self.fp_regfile[I_f5]
+            s_imm = sign_extend(ins[31:25]<<5 | ins[11:7], 12) & self.mask64
             addr = ( r1 + s_imm) & self.mask64  
             if (addr == self.to_host_addr):
-                log.error("__to_host__")
+                # -log.error("__to_host__")
                 return False
             if (addr == self.store_breakpoint_addr):
                 self.breakpoint_addr=self.pc
-            self.sys_bus.write(addr, fpr2, 1<<ins.I_f3)           
-        elif op in [Ops.FMADD, Ops.FNMADD]:
-            f_f3 = ins.I_f3
-            res1, fflags1 = FPU(fpr1, fpr2, FP_OP_F5.FMUL, f_f3, ins.I_rs2)
+            self.sys_bus.write(addr, fpr2, 1<<I_f3)           
+        elif op_name in ["FMADD", "FNMADD"]:
+            fpr1 = self.fp_regfile[I_rs1]
+            fpr2 = self.fp_regfile[I_rs2]
+            fpr3 = self.fp_regfile[I_f5]
+            f_f3 = I_f3
+            res1, fflags1 = FPU(fpr1, fpr2, FP_OP_F5.FMUL, f_f3, I_rs2)
         
-            res2, fflags2 = FPU(res1, fpr3, FP_OP_F5.FADD, f_f3, ins.I_rs2)
+            res2, fflags2 = FPU(res1, fpr3, FP_OP_F5.FADD, f_f3, I_rs2)
             
             fflags1 = pack_fflags(fflags1)
             fflags2 = pack_fflags(fflags2)
             
-            res2 = res2 if op==Ops.FMADD else -res2
+            res2 = res2 if op_name=="FMADD" else -res2
             
             new_rd = sign_extend(pack_f32(res2), 32)&self.mask64
                 
@@ -818,16 +942,19 @@ class RV64Hart():
             self.write_back = True
             
             self.csr.fcsr.FFL = fflags1|fflags2  
-        elif op in [Ops.FMSUB, Ops.FMNSUB]:
-            f_f3 = ins.I_f3
-            res1, fflags1 = FPU(fpr1, fpr2, FP_OP_F5.FMUL, f_f3, ins.I_rs2)
+        elif op_name in ["FMSUB", "FMNSUB"]:
+            fpr1 = self.fp_regfile[I_rs1]
+            fpr2 = self.fp_regfile[I_rs2]
+            fpr3 = self.fp_regfile[I_f5]
+            f_f3 = I_f3
+            res1, fflags1 = FPU(fpr1, fpr2, FP_OP_F5.FMUL, f_f3, I_rs2)
         
-            res2, fflags2 = FPU(res1, fpr3, FP_OP_F5.FSUB, f_f3, ins.I_rs2)
+            res2, fflags2 = FPU(res1, fpr3, FP_OP_F5.FSUB, f_f3, I_rs2)
             
             fflags1 = pack_fflags(fflags1)
             fflags2 = pack_fflags(fflags2)
             
-            res2 = res2 if op==Ops.FMSUB else -res2
+            res2 = res2 if op_name=="FMSUB" else -res2
             
             new_rd = sign_extend(pack_f32(res2), 32)&self.mask64
                 
@@ -835,9 +962,12 @@ class RV64Hart():
             self.write_back = True
             
             self.csr.fcsr.FFL = fflags1|fflags2           
-        elif op==Ops.OP_FP:
-            f_f5 = FP_OP_F5(ins.I_f5)
-            f_f3 = ins.I_f3
+        elif op_name=="OP_FP":
+            fpr1 = self.fp_regfile[I_rs1]
+            fpr2 = self.fp_regfile[I_rs2]
+            # fpr3 = self.fp_regfile[I_f5]
+            f_f5 = FP_OP_F5(I_f5)
+            f_f3 = I_f3
             
             # dont_sign_extend = False
             # print(f_f5, f_f3)
@@ -849,7 +979,7 @@ class RV64Hart():
                 self.to_float_reg=True
                 fflags = self.csr.fcsr.FFL
             elif f_f5 in [FP_OP_F5.FSGNJ, FP_OP_F5.FMINMAX, FP_OP_F5.FADD, FP_OP_F5.FSUB, FP_OP_F5.FMUL, FP_OP_F5.FDIV, FP_OP_F5.FSQRT]:
-                res, fflags = FPU(fpr1, fpr2, f_f5, f_f3, ins.I_rs2)
+                res, fflags = FPU(fpr1, fpr2, f_f5, f_f3, I_rs2)
                 self.to_float_reg = True
                 
                 if f_f5!=FP_OP_F5.FSGNJ:
@@ -879,33 +1009,41 @@ class RV64Hart():
             self.write_back = True
             
             self.csr.fcsr.FFL = fflags         
-        elif op==Ops.SYSTEM:
-            if ins.I_f3 == 0:
-                f12 = SYS_F12(ins.I_f12)
+        elif op_name=="ILLEGAL":
+            self.raiseException(ExceptionCode.IllegalInstruction)
+            self.handleException()
+        elif op_name=="SYSTEM":
+            if I_f3 == 0:
+                f12 = SYS_F12(I_f12)
                 if f12==SYS_F12.MRET:
-                    log.error("--MRET--")
+                    # -log.error("--MRET--")
                     self.new_pc = self.mret()
                 elif f12==SYS_F12.SRET:
-                    log.error("--SRET--")
+                    # -log.error("--SRET--")
                     self.new_pc = self.sret()
                 elif f12==SYS_F12.ECALL:
-                    log.error("--ECALL--")
-                    if (self.mode==Mode.M): self.raiseException(ExceptionCode.Mcall)
-                    elif (self.mode==Mode.S): self.raiseException(ExceptionCode.Scall)
-                    elif (self.mode==Mode.U): self.raiseException(ExceptionCode.Ucall)
+                    # -log.error("--ECALL--")
+                    if (self.mode==Mode.M): 
+                        self.raiseException(ExceptionCode.Mcall)
+                    elif (self.mode==Mode.S): 
+                        self.raiseException(ExceptionCode.Scall)
+                    elif (self.mode==Mode.U): 
+                        self.raiseException(ExceptionCode.Ucall)
+                    self.handleException()
                 elif f12==SYS_F12.EBREAK:
-                    log.error("--EBREAK--")
+                    # -log.error("--EBREAK--")
                     # TODO: implement debugger for FPGA @DavideRuzza
                     self.raiseException(ExceptionCode.Breakpoint)
+                    self.handleException()
                 elif f12==SYS_F12.WFI:
-                    log.error("--WFI--")
+                    # -log.error("--WFI--")
                     self.wait_mode = True
                 else:                    
-                    log.error(f" {f12} Not Implemented")
+                    # -log.error(f" {f12} Not Implemented")
                     return False
             else: # CSR
-                f3 = CSR_F3(ins.I_f3)
-                csr_key = ins.I_f12
+                f3 = CSR_F3(I_f3)
+                csr_key = I_f12
                 new_csr = None
                 # read csr if the mode allows
                 
@@ -926,42 +1064,43 @@ class RV64Hart():
                         # for I instruction instead of the content of r1 they use 
                         # r1 position as immediate
                         is_imm_csr = bool(f3.value>>2)
-                        value = ins.I_rs1 if is_imm_csr else r1
+                        value = I_rs1 if is_imm_csr else r1
                         
-                        csrsrc_cond = (not is_imm_csr and (ins.I_rs1 != 0)) or \
+                        csrsrc_cond = (not is_imm_csr and (I_rs1 != 0)) or \
                                         (is_imm_csr and value != 0)
                                         
                         if (f3 == CSR_F3.CSRRS) or (f3 == CSR_F3.CSRRSI):
-                            log.info("CSRRS")
+                            # -log.info("CSRRS")
                             if csrsrc_cond:
                                 new_csr = csr_value | value
                                 self.write_csr = True
                         elif (f3 == CSR_F3.CSRRC) or (f3 == CSR_F3.CSRRCI):
-                            log.info("CSRRC")
+                            # -log.info("CSRRC")
                             if csrsrc_cond:
                                 clear_bit_mask = (~value) & self.mask64
                                 new_csr = csr_value & clear_bit_mask
                                 self.write_csr = True  
                         elif (f3 == CSR_F3.CSRRW) or (f3 == CSR_F3.CSRRWI):
-                            log.info("CSRRW")
+                            # -log.info("CSRRW")
                             new_csr = value
                             self.write_csr = True    
                         else:
                             raise Exception(f'CSR OP {f3} not defined')
                     else:
-                        log.error("not enough priviledge")
+                        # -log.error("not enough priviledge")
                         self.raiseException(ExceptionCode.IllegalInstruction)
+                        self.handleException()
                 else:
-                    log.error(f"csr 0x{hex(csr_key)} not implemented")
+                    # -log.error(f"csr 0x{hex(csr_key)} not implemented")
                     self.raiseException(ExceptionCode.IllegalInstruction)
-                    
+                    self.handleException()               
         else:
             # raise Exception(f"{op} not implemented")
-            log.error("Not Implemented")
+            # -log.error("Not Implemented")
             return False
         
         # ------------------------------------------------------------------------
-        self.handleException()
+        # self.handleException()
         
         if self.write_csr:
             if self.csr[csr_key].rw != 0b11: # is read-only
@@ -972,29 +1111,31 @@ class RV64Hart():
             else:
                 self.write_back = False
                 self.raiseException(ExceptionCode.IllegalInstruction)
+                self.handleException()
         
-        self.handleException()
+        # self.handleException()
 
         if self.write_back:
-            
             if self.to_float_reg:
-                log.info(f"write reg - {self.fp_reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
-                
-                self.fp_regfile[ins.I_rd] = new_rd
+                # -log.info(f"write reg - {self.fp_reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
+                self.fp_regfile[I_rd] = new_rd
             else:
-                log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
-                self.regfile[ins.I_rd] = new_rd
+                # -log.info(f"write reg - {self.reg_names[ins.I_rd]} <- {hex(new_rd&self.mask64)}")
+                self.regfile[I_rd] = new_rd
         
+        mcountinhibit = self.csr['mcountinhibit'].value
         if self.inst_ret:
-            if self.csr['mcountinhibit']._blocks['IR'].val == 0:
-                self.csr.minstret[:] = self.csr.minstret[:] + 1  # = self.csr.minstret.all+1
+            # IR -> bit 2 position
+            if (mcountinhibit>>2) & 0x1 == 0:
+                self.csr.csr_map[0xb02].reg.reg +=  1  # = self.csr.minstret.all+1
             
         if self.cnt_cycle:
-            if self.csr['mcountinhibit']._blocks['CY'].val == 0:
-                self.csr.cycle[:] = self.csr.cycle[:] + 1  # = self.csr.minstret.all+1
+            # CY -> bit 0 position
+            if mcountinhibit & 0x1 == 0:
+                self.csr.csr_map[0xc00].reg.reg += 1  # = self.csr.minstret.all+1
             
         if self.pc==self.breakpoint_addr:
-            log.error("-- Breakpoint --")
+            # -log.error("-- Breakpoint --")
             print(f"self.new_pc: 0x{(self.new_pc & self.mask64):8x}")
             self.pc = self.new_pc & self.mask64
             return False
@@ -1005,7 +1146,7 @@ class RV64Hart():
 
 
 # ---- settings
-RISCV_TEST = 0
+RISCV_TEST = 1
 CUSTOM_TEST = 0
 
 VERBOSE = 0
@@ -1013,7 +1154,6 @@ DEBUG = 0
 
 CONSOLE = 1
 PROFILE = 0
-
 
 VERBOSE_LEVEL = None
 csr = CsrFile()
@@ -1039,14 +1179,14 @@ else:
 input_path = Path("tests/rv64/bin/p")
   
         
-tests = sorted(list(input_path.glob("rv64uc-p-*.bin")))
+tests = sorted(list(input_path.glob("rv64ui-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
 # ------------------------------ memory map
 # ref : https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
 
 
-tests = [Path("opensbi/bin/fw_jump.bin")]
+# tests = [Path("opensbi/bin/fw_jump.bin")]
 # tests = [Path("./tests/custom/hello/hello.bin")]
 # tests = [Path("./tests/custom/timer_interrupt/main.bin")]
 # tests = [tests[0]]
@@ -1060,7 +1200,6 @@ RAM_BASE = 0x8000_0000
 MEIP_BIT = 11
 SEIP_BIT = 9
 
-from pyinstrument import Profiler
 
 for test in tests:
     print(f"{COL['r']}{str(test.stem):<20s}{COL['rst']}", 
@@ -1133,6 +1272,8 @@ for test in tests:
         
     # break
     try:
+        counter = 0
+        time = datetime.datetime.now()
         while(h0.step() and break_debug):
             
             if DEBUG:
@@ -1193,7 +1334,7 @@ for test in tests:
                             print(h0.fp_regfile)
                     elif cmd[0]=="":
                         clint.inc_time()
-                        log.error(clint.mtime)
+                        # -log.error(clint.mtime)
                         break
                     elif cmd[0]=="br":
                         if len(cmd)>1:
@@ -1201,7 +1342,7 @@ for test in tests:
                             set_log_level(logging.CRITICAL)
                             while(h0.step()):
                                 clint.inc_time()
-                                log.error(clint.mtime)
+                                # -log.error(clint.mtime)
                             h0.set_breakpoint(-1)
                             set_log_level(VERBOSE_LEVEL)
                     elif cmd[0]=="brst":
@@ -1209,7 +1350,7 @@ for test in tests:
                             h0.set_store_breakpoint(int(cmd[1], 16))
                             while(h0.step()):
                                 clint.inc_time()
-                                log.error(clint.mtime)
+                                # -log.error(clint.mtime)
                             h0.set_store_breakpoint(-1)
                             h0.set_breakpoint(-1)
                     elif cmd[0]=="brld":
@@ -1217,7 +1358,7 @@ for test in tests:
                             h0.set_load_breakpoint(int(cmd[1], 16))
                             while(h0.step()):
                                 clint.inc_time()
-                                log.error(clint.mtime)
+                                # -log.error(clint.mtime)
                             h0.set_load_breakpoint(-1)
                             h0.set_breakpoint(-1)
                     elif cmd[0]=="untilcsr":
@@ -1235,7 +1376,7 @@ for test in tests:
                                 # print(hex(csr_addr), h0.csr[csr_addr].all)
                                 while(h0.step()):
                                     clint.inc_time()
-                                    log.error(clint.mtime)
+                                    # -log.error(clint.mtime)
                                     if h0.csr[csr_addr].all==int(cmd[2]):
                                         break
                                 
@@ -1254,8 +1395,14 @@ for test in tests:
                         except KeyError:
                             print(f"{cmd[1]} not a valid csr" )   
             else: 
-                clint.inc_time()
-                log.error(clint.mtime)
+                if (counter%500000 == 0):
+                    now = datetime.datetime.now()
+                    print(f"{now.strftime("%H:%M:%S")} : dt={(now-time).total_seconds():.2f} - {counter/1e6: .1f}mln ops")
+                    time = datetime.datetime.now()
+                if counter%4==0:
+                    clint.inc_time()
+                counter+=1
+                # -log.error(clint.mtime)
     
     except Exception as e:       
         # print("Keyboard Interrupt")
@@ -1271,6 +1418,15 @@ for test in tests:
             profiler.stop()
             with open('profile.html', 'w') as f:
                 f.write(profiler.output_html())
+                
+        print("------ INSTRUCTION PROFILE -------")
+        sorted_dict = dict(sorted(h0.instruction_profile.items(), key=lambda x: x[1], reverse=True))
+        max_name_len = max(map(lambda x: len(x.name), list(Ops)))
+        
+        for k, v in sorted_dict.items():
+            print(f"- {k:<{max_name_len}}: {v}")
+        print("----------------------------------")
+        
         
     syscall_code = h0.regfile[17]
     syscall_data = h0.regfile[10] 

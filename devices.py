@@ -1,6 +1,7 @@
 import logging
-from struct import pack, unpack
+from struct import pack, unpack, unpack_from
 from utils import CsrReg
+import mmap
 
 from typing import List, Tuple, TYPE_CHECKING
 
@@ -34,9 +35,15 @@ class BaseDevice:
         return f"{self.__class__.__name__}(name={self.name}, size={self.size:x})"
 
 
-import mmap
 
 class MemoryDevice(BaseDevice):
+    
+    ENCODING_MAP = {
+        8: "<Q",
+        4: "<L",
+        2: "<H",
+        1: "<B"
+    }
     
     def __init__(self, size, name="dev"):
         self.size : int = size
@@ -51,42 +58,6 @@ class MemoryDevice(BaseDevice):
         
         self.file = open(self.tmpfile, 'r+b')
         self.mem = mmap.mmap(self.file.fileno(), size)
-        
-    # @classmethod
-    # def from_binary_file(
-    #         cls: 'BaseDevice', 
-    #         filepath: str, 
-    #         name='dev') -> 'MemoryDevice':
-        
-    #     with open(filepath, 'rb') as f:
-    #         data = f.read()
-        
-    #     size = len(data)
-    #     round_size = cls.round4Kb(len(data))
-    #     newdev = cls(size=round_size, name=name)
-    #     data = data+b'\x00'*(round_size-size)
-    #     newdev.mem = data
-
-    #     return newdev
-    
-    # def read(self, addr: int, size: int = 4) -> int:
-    #     assert addr>=0, "something is wrong addr < 0" 
-    #     assert addr+size<=self.size-1, \
-    #         f"addr: {hex(addr+size)} is more than dev size"
-        
-    #     enc_str = self.get_encoding(size)
-    #     return unpack(enc_str, self.mem[addr:addr+size])[0]
-    
-    # def write(self, addr: int, value: int, size: int = 4):
-        
-    #     assert addr>=0, "something is wrong addr < 0" 
-    #     assert addr+size<=self.size-1, \
-    #         f"addr: {hex(addr+size)} is more than dev size"
-        
-    #     mask = (1<<(size*8))-1
-    #     enc_str = self.get_encoding(size)
-    #     data = pack(enc_str, value&mask)
-    #     self.mem = self.mem[:addr] + data + self.mem[addr+size:]
     
     @classmethod
     def from_binary_file(
@@ -102,18 +73,32 @@ class MemoryDevice(BaseDevice):
         newdev.mem[:len(data)] = data  # Slice assignment is fast
         
         return newdev
+    
+    def read_burst(self, addr: int, num:int, size: int=4)->List[int]:
+        assert addr>=0 and addr+size*num<=self.size
+        unpack_str = self.ENCODING_MAP[size]+self.ENCODING_MAP[size][-1]*(num-1)
+        return unpack(unpack_str, self.mem[addr:addr+(size*num)])
+    
+    def read_raw_burst(self, addr: int, num:int, size: int=4)->List[int]:
+        assert addr>=0 and addr+size*num<=self.size
+        # unpack_str = self.ENCODING_MAP[size]+self.ENCODING_MAP[size][-1]*(num-1)
+        return self.mem[addr:addr+(size*num)]
 
     def read(self, addr: int, size: int = 4) -> int:
         assert addr>=0 and addr+size<=self.size
-        enc_str = self.get_encoding(size)
-        return unpack(enc_str, self.mem[addr:addr+size])[0]
+        # enc_str = self.get_encoding(size)
+        # return unpack(enc_str, self.mem[addr:addr+size])[0]
+        return unpack(self.ENCODING_MAP[size], self.mem[addr:addr+size])[0]
+        # return unpack_from(self.ENCODING_MAP[size], self.mem, addr)[0]
     
     def write(self, addr: int, value: int, size: int = 4):
         assert addr>=0 and addr+size<=self.size
-        mask = (1<<(size*8))-1
-        enc_str = self.get_encoding(size)
-        data = pack(enc_str, value&mask)
-        self.mem[addr:addr+size] = data
+        # mask = (1<<(size*8))-1
+        # enc_str = self.get_encoding(size)
+        # data = pack(enc_str, value&mask)
+        # self.mem[addr:addr+size] = data
+        mask = (1 << (size * 8)) - 1
+        self.mem[addr:addr+size] = pack(self.ENCODING_MAP[size], value & mask)
 
         
     @staticmethod
@@ -206,7 +191,7 @@ class MemoryDevice(BaseDevice):
                 
     def __repr__(self):
         return f"{self.__class__.__name__}(name={self.name}, size={self.size_str()})"
- 
+
 # https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
 # https://chromitem-soc.readthedocs.io/en/0.9.9/clint.html
 # https://pdos.csail.mit.edu/6.828/2025/readings/FU540-C000-v1.0.pdf
@@ -232,7 +217,13 @@ class CLINT(BaseDevice):
         self.hart_mip : List[CsrReg] = []
         
         self.timer_int_pending = []
+        # self.timer_cleared = [] # check if the timer interrupt was already cleared from csr
+        # self.timer_setted = [] # check if the timer interrupt was already cleared from csr
+        self.timer_interrupted = []
         self.software_int_pending = []
+        self.software_interrupted = []
+        # self.software_cleared = [] # check if the software interrupt was already cleared from csr
+        # self.software_setted = [] # check if the software interrupt was already cleared from csr
         
         self.mtime : int = 0
         
@@ -242,30 +233,66 @@ class CLINT(BaseDevice):
         
         self.mtime += 1
         self.update_logic()
-        
+    
     def update_logic(self):
+        mtime = self.mtime
         
         for i in range(self.num_harts):
-            if self.mtimecmp[i] < self.mtime:
-                # print(f"hart {i} has timer interrupt")
+            mtimecmp_i = self.mtimecmp[i]
+            
+            # Timer interrupt logic
+            timer_expired = mtimecmp_i < mtime
+            if timer_expired and not self.timer_interrupted[i]:
                 self.timer_int_pending[i] = 1
+                self.timer_interrupted[i] = 1
                 self.hart_mip[i]._blocks['MTIP'].val = 1
-            else:
+            elif not timer_expired and self.timer_interrupted[i]:
                 self.timer_int_pending[i] = 0
+                self.timer_interrupted[i] = 0
                 self.hart_mip[i]._blocks['MTIP'].val = 0
-                
-        for i in range(self.num_harts):
-            if self.software_int_pending[i] > 0:
+            
+            # Software interrupt logic
+            if self.software_int_pending[i] and not self.software_interrupted[i]:
                 self.hart_mip[i]._blocks['MSIP'].val = 1
-            else:
+                self.software_interrupted[i] = 1
+            elif self.software_interrupted[i]:
+                self.software_interrupted[i] = 0
                 self.hart_mip[i]._blocks['MSIP'].val = 0
+                
+    # def update_logic(self):
+        
+    #     for i in range(self.num_harts):
+            
+    #         if self.mtimecmp[i] < self.mtime and self.timer_interrupted[i]==0:
+    #             self.timer_int_pending[i] = 1
+    #             self.timer_interrupted[i] = 1
+    #             self.hart_mip[i]._blocks['MTIP'].val = 1
+    #         else:
+    #             if self.timer_interrupted[i]==1:
+    #                 self.timer_int_pending[i] = 0
+    #                 self.timer_interrupted[i] = 0
+    #                 self.hart_mip[i]._blocks['MTIP'].val = 0
+            
+    #         if self.software_int_pending[i] > 0 and self.software_interrupted[i]==0:
+    #             self.hart_mip[i]._blocks['MSIP'].val = 1
+    #             self.software_interrupted[i] = 0
+    #         else:
+    #             if self.software_interrupted[i] == 1:
+    #                 self.software_interrupted[i] = 0
+    #                 self.hart_mip[i]._blocks['MSIP'].val = 0
+                
+            
         
         
     def register_hart(self, hart = 'RV64Hart'):
         self.num_harts+=1
         self.hart_mip.append(hart.csr.mip)
         self.timer_int_pending.append(0)
+        self.timer_interrupted.append(0)
+        # self.timer_setted.append(0)
         self.software_int_pending.append(0)
+        self.software_interrupted.append(0)
+        # self.software_setted.append(0)
         self.mtimecmp.append(0)
 
     
@@ -406,7 +433,7 @@ class InterruptController(BaseDevice):
         
         self.claimed[ctx] = irq_id 
         self.update_logic()
-        log.debug(f"[PLIC] Context {ctx} claimed irq {irq_id}")
+        # -log.debug(f"[PLIC] Context {ctx} claimed irq {irq_id}")
         return irq_id
         
     def _complete(self, src_num):
@@ -417,7 +444,7 @@ class InterruptController(BaseDevice):
                 # than clear it so more pending can happend
                 self.claimed[i] = 0
                 self.pending[src_num] = 0
-                log.debug(f"[PLIC] irq {src_num} completed!")
+                # -log.debug(f"[PLIC] irq {src_num} completed!")
         self.update_logic()
         
     

@@ -211,7 +211,7 @@ class UART16550(BaseDevice):
     
     def read(self, addr, size=1):
         """CPU reads from UART register"""
-        reg = addr & 0x7
+        reg = (addr>>2) & 0x7
         
         # Check if accessing divisor latch
         if self.lcr & 0x80:  # DLAB set
@@ -270,7 +270,7 @@ class UART16550(BaseDevice):
     
     def write(self, addr, value, size=1):
         """CPU writes to UART register"""
-        reg = addr & 0x7
+        reg = (addr>>2) & 0x7
         value = value & 0xFF
         
         # Check if accessing divisor latch

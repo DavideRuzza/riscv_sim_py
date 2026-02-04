@@ -7,7 +7,7 @@ kernel: kernel.o linker.ld
 	rm -f *.o
 
 kernel.o: kernel.s
-	${CROSS_COMPILE}as -march=rv64imacf -mabi=lp64 -o kernel.o -c kernel.s
+	${CROSS_COMPILE}as -march=rv64imaf -mabi=lp64 -o kernel.o -c kernel.s
 	
 
 clean:

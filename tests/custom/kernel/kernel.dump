@@ -7,56 +7,56 @@ Disassembly of section .text:
 0000000080200000 <_start>:
     80200000:	444248b7          	lui	a7,0x44424
     80200004:	34e8889b          	addiw	a7,a7,846 # 4442434e <_start-0x3bddbcb2>
-    80200008:	4801                	li	a6,0
-    8020000a:	4531                	li	a0,12
-    8020000c:	00000597          	auipc	a1,0x0
-    80200010:	01058593          	addi	a1,a1,16 # 8020001c <debug_string>
-    80200014:	4601                	li	a2,0
-    80200016:	00000073          	ecall
+    80200008:	00000813          	li	a6,0
+    8020000c:	00c00513          	li	a0,12
+    80200010:	00000597          	auipc	a1,0x0
+    80200014:	01458593          	addi	a1,a1,20 # 80200024 <debug_string>
+    80200018:	00000613          	li	a2,0
+    8020001c:	00000073          	ecall
 
-000000008020001a <loop>:
-    8020001a:	a001                	j	8020001a <loop>
+0000000080200020 <loop>:
+    80200020:	0000006f          	j	80200020 <loop>
 
 Disassembly of section .rodata:
 
-000000008020001c <debug_string>:
-    8020001c:	6548                	ld	a0,136(a0)
-    8020001e:	6c6c                	ld	a1,216(s0)
-    80200020:	6f77206f          	j	80272f16 <debug_string+0x72efa>
-    80200024:	6c72                	ld	s8,280(sp)
-    80200026:	0a64                	addi	s1,sp,284
+0000000080200024 <debug_string>:
+    80200024:	6548                	.insn	2, 0x6548
+    80200026:	6c6c                	.insn	2, 0x6c6c
+    80200028:	6f77206f          	j	80272f1e <debug_string+0x72efa>
+    8020002c:	6c72                	.insn	2, 0x6c72
+    8020002e:	0a64                	.insn	2, 0x0a64
 	...
 
 Disassembly of section .riscv.attributes:
 
 0000000000000000 <.riscv.attributes>:
-   0:	5941                	li	s2,-16
-   2:	0000                	unimp
-   4:	7200                	ld	s0,32(a2)
-   6:	7369                	lui	t1,0xffffa
+   0:	4d41                	.insn	2, 0x4d41
+   2:	0000                	.insn	2, 0x0000
+   4:	7200                	.insn	2, 0x7200
+   6:	7369                	.insn	2, 0x7369
    8:	01007663          	bgeu	zero,a6,14 <_start-0x801fffec>
-   c:	0000004f          	fnmadd.s	ft0,ft0,ft0,ft0,rne
-  10:	7205                	lui	tp,0xfffe1
+   c:	00000043          	fmadd.s	ft0,ft0,ft0,ft0,rne
+  10:	7205                	.insn	2, 0x7205
   12:	3676                	.insn	2, 0x3676
-  14:	6934                	ld	a3,80(a0)
+  14:	6934                	.insn	2, 0x6934
   16:	7032                	.insn	2, 0x7032
-  18:	5f31                	li	t5,-20
-  1a:	326d                	addiw	tp,tp,-5 # fffffffffffe0ffb <debug_string+0xffffffff7fde0fdf>
+  18:	5f31                	.insn	2, 0x5f31
+  1a:	326d                	.insn	2, 0x326d
   1c:	3070                	.insn	2, 0x3070
   1e:	615f 7032 5f31      	.insn	6, 0x5f317032615f
   24:	3266                	.insn	2, 0x3266
   26:	3270                	.insn	2, 0x3270
-  28:	635f 7032 5f30      	.insn	6, 0x5f307032635f
-  2e:	697a                	ld	s2,408(sp)
-  30:	32727363          	bgeu	tp,t2,356 <_start-0x801ffcaa>
-  34:	3070                	.insn	2, 0x3070
-  36:	7a5f 6d6d 6c75      	.insn	6, 0x6c756d6d7a5f
-  3c:	7031                	c.lui	zero,0xfffec
-  3e:	5f30                	lw	a2,120(a4)
-  40:	617a                	ld	sp,408(sp)
-  42:	6d61                	lui	s10,0x18
-  44:	3070316f          	jal	sp,3b4a <_start-0x801fc4b6>
-  48:	7a5f 6c61 7372      	.insn	6, 0x73726c617a5f
-  4e:	30703163          	.insn	4, 0x30703163
-  52:	7a5f 6163 7031      	.insn	6, 0x703161637a5f
-  58:	0030                	addi	a2,sp,8
+  28:	7a5f 6369 7273      	.insn	6, 0x727363697a5f
+  2e:	7032                	.insn	2, 0x7032
+  30:	5f30                	.insn	2, 0x5f30
+  32:	6d7a                	.insn	2, 0x6d7a
+  34:	756d                	.insn	2, 0x756d
+  36:	316c                	.insn	2, 0x316c
+  38:	3070                	.insn	2, 0x3070
+  3a:	7a5f 6161 6f6d      	.insn	6, 0x6f6d61617a5f
+  40:	7031                	.insn	2, 0x7031
+  42:	5f30                	.insn	2, 0x5f30
+  44:	617a                	.insn	2, 0x617a
+  46:	726c                	.insn	2, 0x726c
+  48:	70316373          	csrrsi	t1,0x703,2
+  4c:	0030                	.insn	2, 0x0030

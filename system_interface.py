@@ -1,224 +1,213 @@
-import logging
-from devices import *
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple
 import threading
+# import logging
+from devices import *
+# from typing import List, Dict, Optional, TYPE_CHECKING
+# import threading
 
-log = logging.getLogger(__name__)
 
-if TYPE_CHECKING:
-    from main import RV64Hart
+PAGE_SHIFT = 12          # 4KB pages (cambialo se vuoi)
+PAGE_SIZE  = 1 << PAGE_SHIFT
 
 
-class SystemInterface():
-    
+class SystemInterface:
+    """
+    High-performance system bus for simulators/emulators.
+
+    Design goals:
+    - O(1) device lookup
+    - no loops in read/write hot path
+    - page based dispatch (like real MMU/bus)
+    """
+
+    # =========================================================
+    # INIT
+    # =========================================================
+
     def __init__(self):
-        
-        self.dev_map : Dict[int, BaseDevice] = {}
-        self.dev_list : List[BaseDevice] = []
-        self.mem_map : List[List[int, int]] = []
 
+        # devices
+        self.dev_list: List[BaseDevice] = []
+
+        # solo per debug / __repr__
+        self.mem_map: List[Tuple[int, int, BaseDevice]] = []
+
+        # 🔥 FAST PATH: page -> (start_addr, device)
+        self.page_table: Dict[int, Tuple[int, BaseDevice]] = {}
+
+        # locks
         self._lock = threading.Lock()
-        self._bus_owner: Optional[int] = None  # Which hart owns the bus
+        self._bus_owner: Optional[int] = None
 
-        # (addr, size, valid)
-        self.reservations : Dict[int, List[int, int, bool]] = {}
-    
+        # LR/SC reservations
+        # hart -> [addr, size, valid]
+        self.reservations: Dict[int, List[int]] = {}
+
+    # =========================================================
+    # DEVICE REGISTRATION
+    # =========================================================
+
+    def register_device(self, dev: BaseDevice, start_address: int):
+        """
+        Register device and build page table mapping.
+        Called rarely → ok to be slower here.
+        """
+
+        assert dev not in self.dev_list, f"{dev.name} already registered"
+
+        end = start_address + dev.size - 1
+
+        # overlap check (slow path, ok)
+        for st, ed, _ in self.mem_map:
+            if not (end < st or start_address > ed):
+                raise Exception(f"address overlap with existing device")
+
+        self.dev_list.append(dev)
+        self.mem_map.append((start_address, end, dev))
+
+        # precompute burst capability (avoid hasattr in hot path)
+        dev._has_read_burst = hasattr(dev, "read_burst")
+        dev._has_raw_burst  = hasattr(dev, "read_raw_burst")
+
+        # 🔥 page mapping (FAST)
+        for addr in range(start_address, end + 1, PAGE_SIZE):
+            page = addr >> PAGE_SHIFT
+            self.page_table[page] = (start_address, dev)
+
+    # =========================================================
+    # INTERNAL FAST RESOLVE
+    # =========================================================
+
+    def _resolve(self, addr: int):
+        """
+        O(1) page lookup.
+        Critical hot path.
+        """
+        page = addr >> PAGE_SHIFT
+        try:
+            base, dev = self.page_table[page]
+            return dev, addr - base
+        except KeyError:
+            raise Exception(f"no device registered in 0x{addr:X}")
+
+    # =========================================================
+    # READ / WRITE (HOT PATH)
+    # =========================================================
+
+    def read(self, addr: int, size: int = 4):
+        dev, rel = self._resolve(addr)
+        return dev.read(rel, size)
+
+    def write(self, addr: int, value: int, size: int = 4):
+        dev, rel = self._resolve(addr)
+        dev.write(rel, value, size)
+        self.check_invalidate_reservations(addr, size)
+        return True
+
+    # =========================================================
+    # BURST ACCESS
+    # =========================================================
+
+    def read_burst(self, addr: int, num: int, size: int = 4):
+        dev, rel = self._resolve(addr)
+
+        if dev._has_read_burst:
+            return list(dev.read_burst(rel, num, size))
+        
+        return [dev.read(rel + i * size, size) for i in range(num)]
+        
+    def read_raw_burst(self, addr: int, num: int, size: int = 4):
+        dev, rel = self._resolve(addr)
+
+        if dev._has_raw_burst:
+            return dev.read_raw_burst(rel, num, size)
+
+        out = bytearray()
+        for i in range(num * size):
+            out.append(dev.read(rel + i, 1))
+        return out
+
+    # =========================================================
+    # LR/SC SUPPORT
+    # =========================================================
+
     def register_hart(self, hartid: int):
-        self.reservations[hartid] =  [0, 0, False]
-        
-    def load_reserve(self, addr: int, size: int, hartid: int)->int:
-        """return reservation index to check"""
-        
+        self.reservations[hartid] = [0, 0, False]
+
+    def load_reserve(self, addr: int, size: int, hartid: int):
         self.reservations[hartid] = [addr, size, True]
-        log.debug(f"made reservation {self.reservations[hartid]}")
         return self.read(addr, size)
-    
-    def store_conditional(self, addr: int, value:int, size: int, hartid: int):
-        
-        res_addr, res_size, res_valid = self.reservations[hartid]
-        
-        if res_valid and res_addr==addr and res_size==size:
-            
-            log.debug("BUS: Succeful Store Conditional")
+
+    def store_conditional(self, addr: int, value: int, size: int, hartid: int):
+        res_addr, res_size, valid = self.reservations[hartid]
+
+        if valid and res_addr == addr and res_size == size:
             self.write(addr, value, size)
             return True
-        log.debug("BUS: Failed Store Conditional")
+
         return False
-    
+
     def check_invalidate_reservations(self, addr: int, size: int):
-        
-        for hid in self.reservations:
-            res_addr, res_size, _ = self.reservations[hid]
-            
-            if addr < res_addr + res_size and addr + size > res_addr:
-                # invalidate the reservation
-                log.debug(f"BUS: invalidate reservation from {hid}")
-                self.reservations[hid][2] = False 
-            
-    def register_device(self, dev: BaseDevice, start_address):
-        
-        # TODO: optimize the whole function @DavideRuzza 
-        
-        assert dev not in self.dev_list, f"'{dev.name}' already registered"
-        # print("adding", dev)
-        index = 0
-        for i, addr in enumerate(self.mem_map):
-            # print(f"dev | {self.dev_list[i].name:<15}: {hex(addr[0])} - {hex(addr[1])}")
-            if start_address<addr[0]:
-                index = i
-            elif start_address>addr[1]:
-                index = i+1
-            
-            if (addr[0]<=start_address<=addr[1]) or \
-                (addr[0]<=start_address+dev.size-1<=addr[1]):
-                raise Exception(f"address overlap with {self.dev_list[i].name}")
-        # print("----")
-        self.dev_list.insert(index, dev)
-        self.mem_map.insert(index, [start_address, start_address+dev.size-1])
-        self.dev_map = {}
-        
-        for addr, dev in zip(self.mem_map, self.dev_list):
-            self.dev_map[addr[0]] = dev
-        
-    def read(self, addr: int, size: int = 4):
-        
-        for mem in self.mem_map:
-            st, end = mem
-            
-            if st<=addr<=end:
-                rel_addr = addr-st
-                dev = self.dev_map[st]
-                result = dev.read(addr=rel_addr, size=size)
-                log.debug(f"read {dev.name}: 0x{addr:X} -> 0x{result:0{size}x}")
-                return result
-            
-        raise Exception(f"no device registered in 0x{addr:X}")
-    
-    def write(self, addr: int, value: int, size: int = 4):
-        for mem in self.mem_map:
-            st, end = mem
-        
-            if st<=addr<=end:
-                rel_addr = addr-st
-                dev = self.dev_map[st]
-                dev.write(addr=rel_addr, value=value, size=size)
-                # print(size)
-                mask = (1<<(size*8))-1
-                log.debug(f"write {dev.name}: 0x{addr:X} <- 0x{value&mask:0{size}x}")
-                self.check_invalidate_reservations(addr, size)
-                return True
-        
-        raise Exception(f"no device registered in 0x{addr:X}")
-    
-    def lock(self, hart_id: int, blocking: bool = True, timeout: float = None) -> bool:
-        """
-        Acquire exclusive bus lock
-        
-        Args:
-            hart_id: Hart ID requesting the lock
-            blocking: If True, wait for lock. If False, return immediately
-            timeout: Maximum time to wait (only if blocking=True)
-            
-        Returns:
-            True if lock acquired, False otherwise
-            
-        Example:
-            if bus.lock(hart_id=0):
-                # Do atomic operations
-                bus.unlock(hart_id=0)
-        """
-        
-        acquired = self._lock.acquire(blocking=blocking, timeout=timeout if timeout else -1)
-        
+        end = addr + size
+
+        for r in self.reservations.values():
+            res_addr, res_size, _ = r
+            if addr < res_addr + res_size and end > res_addr:
+                r[2] = False
+
+    # =========================================================
+    # BUS LOCK
+    # =========================================================
+
+    def lock(self, hart_id: int, blocking: bool = True, timeout: float = None):
+        acquired = self._lock.acquire(
+            blocking=blocking,
+            timeout=timeout if timeout else -1
+        )
+
         if acquired:
             self._bus_owner = hart_id
             return True
+
         return False
-    
+
     def unlock(self, hart_id: int):
-        """
-        Release bus lock
-        
-        Args:
-            hart_id: Hart ID releasing the lock
-            
-        Raises:
-            RuntimeError: If hart doesn't own the lock
-            
-        Example:
-            bus.unlock(hart_id=0)
-        """
-        
         if self._bus_owner != hart_id:
-            raise RuntimeError(f"Hart {hart_id} doesn't own the bus lock (owner: {self._bus_owner})")
-        
+            raise RuntimeError(
+                f"Hart {hart_id} doesn't own the bus lock "
+                f"(owner: {self._bus_owner})"
+            )
+
         self._bus_owner = None
         self._lock.release()
-    
-    def is_locked(self) -> bool:
-        """
-        Check if bus is currently locked
-        
-        Returns:
-            True if locked, False if available
-            
-        Example:
-            if not bus.is_locked():
-                print("Bus is available")
-        """
-        
-        return self._bus_owner is not None
-    
-    def get_lock_owner(self) -> Optional[int]:
-        """
-        Get the hart ID that owns the lock
-        
-        Returns:
-            Hart ID if locked, None if unlocked
-            
-        Example:
-            owner = bus.get_lock_owner()
-            if owner is not None:
-                print(f"Bus locked by hart {owner}")
-        """
-        
-        return self._bus_owner
-    
-    def try_lock(self, hart_id: int) -> bool:
-        """
-        Try to acquire lock without blocking (non-blocking version)
-        
-        Args:
-            hart_id: Hart ID requesting the lock
-            
-        Returns:
-            True if lock acquired, False if already locked
-            
-        Example:
-            if bus.try_lock(hart_id=0):
-                # Got the lock!
-                bus.unlock(hart_id=0)
-            else:
-                # Someone else has it
-                pass
-        """
-        
-        return self.lock(hart_id, blocking=False)
-    
-    def __repr__(self):
-        
-        head = " Memory Map "
-        out = []
-        for i, (start, end) in enumerate(self.mem_map):
-            out.append(f"* 0x{start:08X} - 0x{end:08X} = {self.dev_map[start].name}")
-        
-        if len(out)==0:
-            out = ['empty'] 
-        
-        max_len = max([len(s) for s in out]+[len(head)])
-        half_head_len = int((max_len-len(head))/2)
-        
-        out.append("="*max_len)
-        out.insert(0,"="*half_head_len+head+"="*(max_len-len(head)-half_head_len))
 
-        return "\n".join(out)
+    def try_lock(self, hart_id: int):
+        return self.lock(hart_id, blocking=False)
+
+    def is_locked(self) -> bool:
+        return self._bus_owner is not None
+
+    def get_lock_owner(self) -> Optional[int]:
+        return self._bus_owner
+
+    # =========================================================
+    # DEBUG
+    # =========================================================
+
+    def __repr__(self):
+        if not self.mem_map:
+            return "==== Memory Map ====\nempty"
+
+        rows = [
+            f"* 0x{st:08X} - 0x{ed:08X} = {dev.name}"
+            for st, ed, dev in self.mem_map
+        ]
+
+        head = " Memory Map "
+        max_len = max(len(head), *(len(r) for r in rows))
+        pad = (max_len - len(head)) // 2
+
+        rows.insert(0, "=" * pad + head + "=" * (max_len - len(head) - pad))
+        rows.append("=" * max_len)
+
+        return "\n".join(rows)

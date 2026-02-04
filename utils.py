@@ -220,7 +220,7 @@ class BlockReg(Reg):
     def __getattr__(self, attr):
         if attr in self._blocks:
             blk = self._blocks[attr]
-            # log.debug(f"CSR block read  {self.name}.{attr}"\
+            # # -log.debug(f"CSR block read  {self.name}.{attr}"\
             #     f" -> 0b{blk.val:0{blk.nbits}b}")
             return blk.val
         raise AttributeError(f"{attr} not found")
@@ -234,10 +234,10 @@ class BlockReg(Reg):
             blk.val = value
             
             # if attr=='all':
-            #     log.debug(f"CSR write {self.name}"\
+            #     # -log.debug(f"CSR write {self.name}"\
             #         f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
             # else:
-            #     log.debug(f"CSR block write {self.name}.{attr}"\
+            #     # -log.debug(f"CSR block write {self.name}.{attr}"\
             #         f" <- 0b{blk.val:0{blk.nbits}b}")
         else:
             super().__setattr__(attr, value)  # allow normal attributes
@@ -353,7 +353,11 @@ class CsrReg():
         self.blk_mask_n = self.gen_blk_mask(neg=True) #(~self.blk_mask) & self.mask
     
         self.wpri_mask = self.gen_wpri_mask(True) # negative
-        
+    
+    @property
+    def value(self):
+        return self.reg.reg
+    
     def __getitem__(self, key):
         return self.reg[key]
     
@@ -370,12 +374,12 @@ class CsrReg():
                 # pass
             # else:
             #     lsb = self._blk_bit_map[attr][-1]
-            if blk.nbits>15:
-                log.debug(f"CSR block read {self.name}.{attr}"\
-                    f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
-            else:
-                log.debug(f"CSR block read {self.name}.{attr}"\
-                    f" -> 0b{blk.val:0{blk.nbits}b}")
+            # if blk.nbits>15:
+                # -log.debug(f"CSR block read {self.name}.{attr}"\
+                    # f" -> 0x{blk.val:0{int(self.nbits/4)}X}")
+            # else:
+                # -log.debug(f"CSR block read {self.name}.{attr}"\
+                    # f" -> 0b{blk.val:0{blk.nbits}b}")
             return blk.val #& ((self.wpri_mask&self.gen_blk_mask(attr))>>lsb)
         raise AttributeError(f"{attr} not found")           
              
@@ -406,8 +410,8 @@ class CsrReg():
                     else:
                         self._blocks[name].val = blk_set_val   
 
-                log.debug(f"CSR write {self.name}"\
-                    f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
+                # -log.debug(f"CSR write {self.name}"\
+                    # f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
             else:
                 
                 if attr in self.blk_warl:
@@ -418,13 +422,13 @@ class CsrReg():
                     blk.val = value
                     written=True
                 
-                if written:
-                    if blk.nbits>15:
-                        log.debug(f"CSR block write {self.name}.{attr}"\
-                            f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
-                    else:
-                        log.debug(f"CSR block write {self.name}.{attr}"\
-                            f" <- 0b{blk.val:0{blk.nbits}b}")
+                # if written:
+                #     if blk.nbits>15:
+                #         # -log.debug(f"CSR block write {self.name}.{attr}"\
+                #             f" <- 0x{blk.val:0{int(self.nbits/4)}X}")
+                #     else:
+                #         # -log.debug(f"CSR block write {self.name}.{attr}"\
+                #             f" <- 0b{blk.val:0{blk.nbits}b}")
         else:
             super().__setattr__(attr, value)  # allow normal attributes
 
@@ -558,8 +562,8 @@ class CsrFile():
             addr = self.name_to_addr[key]
         csr_reg = self.csr_map[addr]
         csr_reg[:] = value&((1<<csr_reg.nbits)-1)
-        log.debug(f"CSR write {csr_reg.name}"\
-                f" <- 0x{csr_reg[:]:0{int(csr_reg.nbits/4)}X}")
+        # -log.debug(f"CSR write {csr_reg.name}"\
+                # f" <- 0x{csr_reg[:]:0{int(csr_reg.nbits/4)}X}")
     
     def __getattr__(self, attr):
         if attr in self.name_to_addr:
