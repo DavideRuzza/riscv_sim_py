@@ -264,7 +264,7 @@ class SystemInterface():
                     result = list(dev.read_burst(addr=rel_addr, num=num, size=size))
                 else:
                     result = [dev.read(addr=rel_addr+size*i, size=size) for i in range(num)]
-                # -log.debug(f"read {dev.name}: 0x{addr:X} -> 0x{result:0{size}x}")
+                log.debug(f"read {dev.name}: 0x{addr:X} -> 0x{result:0{size}x}")
                 return result
             
         raise Exception(f"no device registered in 0x{addr:X}")
@@ -281,7 +281,7 @@ class SystemInterface():
                     result = dev.read_burst(addr=rel_addr, num=num, size=size)
                 else:
                     result = sum([dev.read(addr=rel_addr+size*i, size=1) for i in range(num*size)])
-                # -log.debug(f"read {dev.name}: 0x{addr:X} -> 0x{result:0{size}x}")
+                log.debug(f"read {dev.name}: 0x{addr:X} -> 0x{result:0{size}x}")
                 return result
             
         raise Exception(f"no device registered in 0x{addr:X}")
@@ -290,7 +290,7 @@ class SystemInterface():
         """return reservation index to check"""
         
         self.reservations[hartid] = [addr, size, True]
-        # -log.debug(f"made reservation {self.reservations[hartid]}")
+        log.debug(f"made reservation {self.reservations[hartid]}")
         return self.read(addr, size)
     
     def store_conditional(self, addr: int, value:int, size: int, hartid: int):
@@ -349,7 +349,7 @@ class SystemInterface():
                 rel_addr = addr-st
                 dev = self.dev_map[st]
                 result = dev.read(addr=rel_addr, size=size)
-                # -log.debug(f"read {dev.name}: 0x{addr:X} -> 0x{result:0{size}x}")
+                log.debug(f"read {dev.name}: 0x{addr:X} -> 0x{result:0{size}x}")
                 return result
             
         raise Exception(f"no device registered in 0x{addr:X}")
@@ -364,7 +364,7 @@ class SystemInterface():
                 dev.write(addr=rel_addr, value=value, size=size)
                 # print(size)
                 mask = (1<<(size*8))-1
-                # -log.debug(f"write {dev.name}: 0x{addr:X} <- 0x{value&mask:0{size}x}")
+                log.debug(f"write {dev.name}: 0x{addr:X} <- 0x{value&mask:0{size}x}")
                 self.check_invalidate_reservations(addr, size)
                 return True
         

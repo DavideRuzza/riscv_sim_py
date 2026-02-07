@@ -1005,13 +1005,13 @@ class RV64Hart():
 
 
 # ---- settings
-RISCV_TEST = 0
+RISCV_TEST = 1
 CUSTOM_TEST = 0
 
-VERBOSE = 0
-DEBUG = 0
+VERBOSE = 1
+DEBUG = 1
 
-CONSOLE = 1
+CONSOLE = 0
 PROFILE = 0
 
 
@@ -1036,20 +1036,20 @@ else:
     VERBOSE_LEVEL = logging.CRITICAL
 # ------------------------------------
 
-input_path = Path("tests/rv64/bin/p")
+input_path = Path("tests/rv64/bin/v")
   
         
-tests = sorted(list(input_path.glob("rv64uc-p-*.bin")))
+tests = sorted(list(input_path.glob("rv64ui-p-*.bin")))
 length = [len(str(t.stem)) for t in tests]
 
 # ------------------------------ memory map
 # ref : https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
 
 
-tests = [Path("opensbi/bin/fw_jump.bin")]
+# tests = [Path("opensbi/bin/fw_jump.bin")]
 # tests = [Path("./tests/custom/hello/hello.bin")]
 # tests = [Path("./tests/custom/timer_interrupt/main.bin")]
-# tests = [tests[0]]
+tests = [Path('tests/rv64/dump/v/rv64ui-v-add.dump')]
 
 
 CLINT_BASE = 0x0200_0000
@@ -1104,7 +1104,7 @@ for test in tests:
         if CUSTOM_TEST:
             to_host_addr = get_symbol_info(test.parent/(test.stem+".elf"), 'tohost')['address']
         else:
-            to_host_addr = get_symbol_info("tests/rv64/elf/p/"+test.stem, 'tohost')['address']
+            to_host_addr = get_symbol_info("tests/rv64/elf/v/"+test.stem, 'tohost')['address']
     else:
         to_host_addr=0
     
