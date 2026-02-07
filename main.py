@@ -478,7 +478,7 @@ class RV64Hart():
         # -log.debug(" - - - - - - - - - - ")
         # ins = BlockReg(32, self.sys_bus.read(self.pc), INSTR_BLK_MAP)
         
-        raw_ins = self.sys_bus.read(self.pc)
+        raw_ins = self.sys_bus.read(self.pc&self.mask32)
         self.ins.reg = raw_ins
         ins = self.ins
         
@@ -782,7 +782,7 @@ class RV64Hart():
             else:
                 if (addr == self.load_breakpoint_addr):
                     self.breakpoint_addr=self.pc
-                new_rd = self.sys_bus.read(addr, size_byte)
+                new_rd = self.sys_bus.read(addr&self.mask32, size_byte)
                 f3_l = LD_F3(I_f3)
 
                 if not (f3_l==LD_F3.LBU or f3_l==LD_F3.LHU or f3_l==LD_F3.LWU):
@@ -801,7 +801,7 @@ class RV64Hart():
                 return False
             if (addr == self.store_breakpoint_addr):
                 self.breakpoint_addr=self.pc
-            self.sys_bus.write(addr, r2, 1<<I_f3)                
+            self.sys_bus.write(addr&self.mask32,  r2, 1<<I_f3)                
         elif op_name=="OP":
             # print(ins.I_rs1, ins.I_rs2)
             new_rd = alu(r1, r2, I_f3, I_f7, False, False)
@@ -1011,6 +1011,7 @@ class RV64Hart():
             self.csr.fcsr.FFL = fflags         
         elif op_name=="ILLEGAL":
             self.raiseException(ExceptionCode.IllegalInstruction)
+            print(f"Illegal {self.pc:08x}")
             self.handleException()
         elif op_name=="SYSTEM":
             if I_f3 == 0:
@@ -1034,6 +1035,7 @@ class RV64Hart():
                     # -log.error("--EBREAK--")
                     # TODO: implement debugger for FPGA @DavideRuzza
                     self.raiseException(ExceptionCode.Breakpoint)
+                    
                     self.handleException()
                 elif f12==SYS_F12.WFI:
                     # -log.error("--WFI--")
@@ -1089,10 +1091,12 @@ class RV64Hart():
                     else:
                         # -log.error("not enough priviledge")
                         self.raiseException(ExceptionCode.IllegalInstruction)
+                        # print(f"Illegal csr priv {self.pc:08x}")
                         self.handleException()
                 else:
                     # -log.error(f"csr 0x{hex(csr_key)} not implemented")
                     self.raiseException(ExceptionCode.IllegalInstruction)
+                    # print(f"Illegal csr impl {self.pc:08x}")
                     self.handleException()               
         else:
             # raise Exception(f"{op} not implemented")
@@ -1111,6 +1115,7 @@ class RV64Hart():
             else:
                 self.write_back = False
                 self.raiseException(ExceptionCode.IllegalInstruction)
+                # print(f"Illegal csr readonly {self.pc:08x}")
                 self.handleException()
         
         # self.handleException()
@@ -1146,7 +1151,7 @@ class RV64Hart():
 
 
 # ---- settings
-RISCV_TEST = 1
+RISCV_TEST = 0
 CUSTOM_TEST = 0
 
 VERBOSE = 0
@@ -1186,7 +1191,7 @@ length = [len(str(t.stem)) for t in tests]
 # ref : https://stackoverflow.com/questions/78346549/clarifying-connectivity-and-memory-implementation-in-the-risc5-platform-architec
 
 
-# tests = [Path("opensbi/bin/fw_jump.bin")]
+tests = [Path("opensbi/bin/fw_jump.bin")]
 # tests = [Path("./tests/custom/hello/hello.bin")]
 # tests = [Path("./tests/custom/timer_interrupt/main.bin")]
 # tests = [tests[0]]
@@ -1210,8 +1215,14 @@ for test in tests:
         
     bios = MemoryDevice.from_binary_file("tests/custom/bios/bios.bin", 'BIOS')
     kernel = MemoryDevice.from_binary_file("tests/custom/kernel/kernel.bin", 'KERNEL')
+    # kernel = MemoryDevice.from_binary_file("tests/custom/linux/linux.bin", 'KERNEL')
     dts = MemoryDevice.from_binary_file("device_tree/platform.dtb", 'DEVICE_TREE')
     
+    
+    
+    
+    
+    # ram = MemoryDevice.from_binary_file("tests/custom/linux/linux.bin", "RAM")
     ram = MemoryDevice.from_binary_file(test, "RAM")
     ram.expand(0x1f_ffff)
     
@@ -1398,8 +1409,8 @@ for test in tests:
                 if (counter%500000 == 0):
                     now = datetime.datetime.now()
                     print(f"{now.strftime("%H:%M:%S")} : dt={(now-time).total_seconds():.2f} - {counter/1e6: .1f}mln ops")
-                    time = datetime.datetime.now()
-                if counter%4==0:
+                    time = now
+                if counter%10==0:
                     clint.inc_time()
                 counter+=1
                 # -log.error(clint.mtime)

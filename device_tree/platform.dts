@@ -3,25 +3,27 @@
 / {
     #address-cells = <2>;
     #size-cells = <2>;
-    compatible = "riscv-custom";
-    model = "riscv-custom,generic";
+    compatible = "risc-sim-py";
+    model = "risc-sim-py,generic";
 
     chosen {
         bootargs = "console=ttyS0,115200";
-        stdout-path = "/soc/serial@10000000";
+        stdout-path = "/soc/uart0@10000000";
     };
 
     cpus {
         #address-cells = <1>;
         #size-cells = <0>;
-        timebase-frequency = <10000000>; // 10 MHz, adjust as needed
+
+        // based on instruction ececution 272kHz clint incremented every 10 operation so roughly 27kHz
+        timebase-frequency = <27000>; 
 
         cpu0: cpu@0 {
             device_type = "cpu";
             reg = <0>;
             status = "okay";
             compatible = "riscv";
-            riscv,isa = "rv64imaf"; // Adjust based on your CPU
+            riscv,isa = "rv64ima"; // Adjust based on your CPU
             // clock-frequency = <100000000>; // 100 MHz, adjust as needed
 
             cpu0_intc: interrupt-controller {
@@ -58,13 +60,6 @@
             riscv,ndev = <30>; // Number of interrupt sources, adjust as needed
         };
 
-        // uart0: serial@10000000 {
-        //     compatible = "ns16550a";
-        //     reg = <0x0 0x10000000 0x0 0x100>;
-        //     reg-shift = <0>;
-        //     clock-frequency = <3686400>;
-        //     current-speed = <115200>;
-        // };
 
         uart0@10000000 {
             clock-frequency = <0x1000000>;
